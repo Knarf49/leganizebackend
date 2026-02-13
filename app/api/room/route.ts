@@ -26,9 +26,9 @@ export async function POST(req: Request) {
 
     // Map Thai labels to enum values
     let enumValue: CompanyType;
-    if (companyType === "บริษัทจำกัด") {
+    if (companyType.includes("บริษัทจำกัด")) {
       enumValue = "LIMITED";
-    } else if (companyType === "บริษัทมหาชนจำกัด") {
+    } else if (companyType.includes("บริษัทมหาชนจำกัด")) {
       enumValue = "PUBLIC_LIMITED";
     } else if (ALLOWED_COMPANY_TYPES.includes(companyType as CompanyType)) {
       enumValue = companyType as CompanyType;
