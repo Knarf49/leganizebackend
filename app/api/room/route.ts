@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomUUID } from "crypto";
+import { context } from "langchain";
 
-const ALLOWED_COMPANY_TYPES = ["บริษัทจำกัด", "บริษัทมหาชนจำกัด"] as const;
+const ALLOWED_COMPANY_TYPES = ["LIMITED", "PUBLIC_LIMITED"] as const;
+const COMPANY_TYPE_LABELS = {
+  LIMITED: "บริษัทจำกัด",
+  PUBLIC_LIMITED: "บริษัทมหาชนจำกัด",
+} as const;
 
 type CompanyType = (typeof ALLOWED_COMPANY_TYPES)[number];
 
@@ -19,11 +24,19 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!ALLOWED_COMPANY_TYPES.includes(companyType as CompanyType)) {
+    // Map Thai labels to enum values
+    let enumValue: CompanyType;
+    if (companyType === "บริษัทจำกัด") {
+      enumValue = "LIMITED";
+    } else if (companyType === "บริษัทมหาชนจำกัด") {
+      enumValue = "PUBLIC_LIMITED";
+    } else if (ALLOWED_COMPANY_TYPES.includes(companyType as CompanyType)) {
+      enumValue = companyType as CompanyType;
+    } else {
       return NextResponse.json(
         {
           error: "Invalid companyType",
-          allowed: ALLOWED_COMPANY_TYPES,
+          allowed: Object.values(COMPANY_TYPE_LABELS),
         },
         { status: 400 },
       );
@@ -41,7 +54,7 @@ export async function POST(req: Request) {
         threadId,
         accessToken,
         status: "ACTIVE",
-        companyType,
+        companyType: enumValue,
       },
     });
 
@@ -70,7 +83,7 @@ export async function POST(req: Request) {
           assistant_id: roomId,
           graph_id: "retrieval_agent",
           context: {
-            companyType,
+            companyType: companyType,
           },
         }),
       },
@@ -90,7 +103,7 @@ export async function POST(req: Request) {
         roomId,
         threadId,
         accessToken,
-        companyType,
+        companyType: COMPANY_TYPE_LABELS[enumValue],
       },
       { status: 201 },
     );

@@ -14,20 +14,55 @@ datasource db {
 }
 
 model Room {
-  id           String     @id @default(uuid())
-  status       RoomStatus @default(ACTIVE)
-  threadId     String     @unique
-  accessToken  String     @unique
-  startedAt    DateTime   @default(now())
+  id           String      @id @default(uuid())
+  status       RoomStatus  @default(ACTIVE)
+  threadId     String      @unique
+  accessToken  String      @unique
+  startedAt    DateTime    @default(now())
   endedAt      DateTime? //null = ยังไม่จบ
   finalSummary String?
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  companyType  String     @default("บริษัทจำกัด")
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  companyType  CompanyType @default(LIMITED)
 }
 
 enum RoomStatus {
   ACTIVE
   ENDED
   ABORTED
+}
+
+enum CompanyType {
+  LIMITED
+  PUBLIC_LIMITED
+}
+
+model TranscriptChunk {
+  id        String   @id @default(cuid())
+  roomId    String
+  content   String
+  createdAt DateTime @default(now())
+}
+
+model LegalRisk {
+  id                  String   @id @default(cuid())
+  roomId              String
+  riskLevel           String
+  issueDescription    String
+  legalBasisType      String
+  legalBasisReference String
+  legalReasoning      String
+  recommendation      String
+  urgencyLevel        String
+  rawJson             Json
+  createdAt           DateTime @default(now())
+}
+
+model AnalysisLog {
+  id        String   @id @default(cuid())
+  roomId    String
+  status    String
+  rawOutput String
+  error     String?
+  createdAt DateTime @default(now())
 }
