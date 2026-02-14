@@ -3,7 +3,10 @@ import { prisma } from "@/lib/prisma";
 
 //TODO: เพิ่ม persistance memory ให้ langgraph
 //TODO: ทำให้ function นี้สามารถสร้าง thread ขึ้นมาได้
-export async function GET(req: NextRequest, { params }) {
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
   try {
     const { id } = await params;
 
