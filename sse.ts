@@ -23,7 +23,7 @@ export function addClient(roomId: string, res: Response) {
   // );
   const set = clients.get(roomId) ?? new Set<Response>();
   set.add(res);
-  // clients.set(roomId, set);
+  clients.set(roomId, set);
   // console.log(`📊 [SSE] Total clients in room ${roomId}: ${set.size}`);
   // console.log(
   //   `📋 [SSE] All rooms with clients after add:`,

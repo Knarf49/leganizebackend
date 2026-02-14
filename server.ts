@@ -10,7 +10,7 @@ const handle = nextApp.getRequestHandler();
 nextApp.prepare().then(() => {
   const app = express();
 
-  app.get("/rooms/:id/events", (req, res) => {
+  app.get("/room/:id/events", (req, res) => {
     const roomId = req.params.id;
     console.log(`🔌 SSE client connecting to room: ${roomId}`);
     console.log(`🌐 Request headers:`, req.headers);

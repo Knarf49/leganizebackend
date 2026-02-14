@@ -11,6 +11,9 @@ export async function runRiskAnalyzer({
 }: LegalAnalyzeInput) {
   const url = `${process.env.LANGGRAPH_URL}/threads/${threadId}/runs/wait`;
 
+  // รวม transcript chunks เป็น message เดียว
+  const combinedTranscript = transcript.join(" ");
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -22,7 +25,12 @@ export async function runRiskAnalyzer({
         thread_id: threadId,
       },
       input: {
-        transcript,
+        messages: [
+          {
+            role: "user",
+            content: `กรุณาวิเคราะห์ความเสี่ยงทางกฎหมายจากการประชุมนี้: ${combinedTranscript}`,
+          },
+        ],
       },
     }),
   });
@@ -34,6 +42,16 @@ export async function runRiskAnalyzer({
 
   const data = await res.json();
 
+  // Debug log to see actual response structure
+  console.log("LangGraph API Response:", JSON.stringify(data, null, 2));
+
+  // Validate response structure
+  if (!data.messages || !Array.isArray(data.messages)) {
+    throw new Error(
+      `Invalid response format. Expected messages array but got: ${JSON.stringify(data)}`,
+    );
+  }
+
   const aiMessages = data.messages.filter((msg: any) => msg.type === "ai");
 
   if (aiMessages.length === 0) {
@@ -43,8 +61,19 @@ export async function runRiskAnalyzer({
   const latestAIMessage = aiMessages[aiMessages.length - 1];
 
   try {
-    return JSON.parse(latestAIMessage.content);
-  } catch {
+    let content = latestAIMessage.content;
+
+    // Extract JSON from markdown code blocks
+    const jsonMatch = content.match(/```json\s*\n([\s\S]*?)\n```/);
+    if (jsonMatch) {
+      content = jsonMatch[1];
+    }
+
+    console.log("Parsing JSON content:", content);
+    return JSON.parse(content);
+  } catch (error) {
+    console.error("JSON parse error:", error);
+    console.error("Raw content:", latestAIMessage.content);
     // ถ้าไม่ใช่ JSON ก็ return text ปกติ
     return latestAIMessage.content;
   }

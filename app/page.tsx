@@ -12,11 +12,12 @@ type LegalRiskEvent = {
     urgencyLevel?: string;
   }>;
 };
-
+//TODO: แก้ sse ไม่ขึ้น
 export default function Home() {
   const [roomIdInput, setRoomIdInput] = useState("");
   const [activeRoomId, setActiveRoomId] = useState("");
   const [connected, setConnected] = useState(false);
+  const [readyState, setReadyState] = useState<number | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   //TODO: แก้เรื่อง alert ไม่ขึ้น
   useEffect(() => {
@@ -24,10 +25,10 @@ export default function Home() {
       return;
     }
 
-    console.log(`🔌 Connecting to SSE: /rooms/${activeRoomId}/events`);
+    console.log(`🔌 Connecting to SSE: /room/${activeRoomId}/events`);
     console.log(`🌐 Current URL: ${window.location.origin}`);
 
-    const es = new EventSource(`/rooms/${activeRoomId}/events`);
+    const es = new EventSource(`/room/${activeRoomId}/events`);
     eventSourceRef.current = es;
 
     const onConnected = (event: Event) => {
@@ -36,6 +37,7 @@ export default function Home() {
       console.log(`📝 Connected event data:`, messageEvent.data);
       console.log(`✅ SSE Connected to room: ${activeRoomId}`);
       setConnected(true);
+      setReadyState(es.readyState);
     };
 
     const onLegalRisk = (event: Event) => {
@@ -56,11 +58,13 @@ export default function Home() {
       console.error(`❌ SSE Error:`, error);
       console.error(`❌ SSE ReadyState:`, es.readyState);
       setConnected(false);
+      setReadyState(es.readyState);
     };
 
     const onOpen = () => {
       console.log(`🎯 SSE onOpen triggered - ReadyState: ${es.readyState}`);
       console.log(`🎯 SSE URL: ${es.url}`);
+      setReadyState(es.readyState);
     };
 
     es.addEventListener("connected", onConnected);
@@ -80,6 +84,7 @@ export default function Home() {
             `✅ Manual connected detection for room: ${activeRoomId}`,
           );
           setConnected(true);
+          setReadyState(es.readyState);
         }
       } catch (e) {
         console.log(`🔍 Non-JSON message: ${event.data}`);
@@ -88,6 +93,7 @@ export default function Home() {
 
     es.onopen = () => {
       console.log(`🔗 SSE onopen handler - connection established`);
+      setReadyState(es.readyState);
     };
 
     es.onerror = onError;
@@ -118,6 +124,7 @@ export default function Home() {
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
     setConnected(false);
+    setReadyState(null);
     setActiveRoomId("");
   };
 
@@ -193,8 +200,10 @@ export default function Home() {
 
         {activeRoomId && (
           <div className="text-xs text-gray-500 mt-2">
-            <p>SSE URL: /rooms/{activeRoomId}/events</p>
-            <p>Connection State: {eventSourceRef.current?.readyState}</p>
+            <p>SSE URL: /room/{activeRoomId}/events</p>
+            <p>
+              Connection State: {activeRoomId ? (readyState ?? "None") : "None"}
+            </p>
           </div>
         )}
       </main>

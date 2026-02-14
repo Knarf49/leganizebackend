@@ -152,9 +152,38 @@ export async function POST(
     console.log(`📋 Analyzer result:`, analyzerResult);
 
     //TODO: alert ไปที่ frontend ผ่าน sse
+    console.log(`🔍 Debugging analyzerResult:`, {
+      result: analyzerResult,
+      type: typeof analyzerResult,
+      hasIssues:
+        analyzerResult &&
+        typeof analyzerResult === "object" &&
+        "issues" in analyzerResult,
+      issuesArray:
+        analyzerResult &&
+        typeof analyzerResult === "object" &&
+        "issues" in analyzerResult
+          ? (analyzerResult as any).issues
+          : null,
+      isArray:
+        analyzerResult &&
+        typeof analyzerResult === "object" &&
+        "issues" in analyzerResult
+          ? Array.isArray((analyzerResult as any).issues)
+          : false,
+      length:
+        analyzerResult &&
+        typeof analyzerResult === "object" &&
+        "issues" in analyzerResult &&
+        Array.isArray((analyzerResult as any).issues)
+          ? (analyzerResult as any).issues.length
+          : 0,
+    });
+
     if (
       analyzerResult &&
       typeof analyzerResult === "object" &&
+      "issues" in analyzerResult &&
       Array.isArray((analyzerResult as { issues?: unknown[] }).issues) &&
       (analyzerResult as { issues: unknown[] }).issues.length > 0
     ) {

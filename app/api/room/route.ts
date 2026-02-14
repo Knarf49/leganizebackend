@@ -104,16 +104,11 @@ export async function POST(req: Request) {
         body: JSON.stringify({
           assistant_id: roomId,
           graph_id: "retrieval_agent",
-          context: {
-            companyType: companyType,
-            outputFOrmat: ANALYSIS_OUTPUT_FORMAT,
-          },
           config: {
             configurable: {
-              searchKwargs: {
-                filter: {
-                  category: companyType,
-                },
+              context: {
+                companyType: companyType,
+                outputFormat: ANALYSIS_OUTPUT_FORMAT,
               },
             },
           },
