@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-
+//TODO: ทำหน้าทีถาม chat เพื่อให้ทีมกฏหมาย test & เอา response format prompt แยกออกมา chain ทีหลัง
 type LegalRiskEvent = {
   roomId: string;
   type: "legal-risk";
@@ -43,13 +43,12 @@ export default function Home() {
       const messageEvent = event as MessageEvent<string>;
       const payload = JSON.parse(messageEvent.data) as LegalRiskEvent;
       console.log(`📊 Legal Risk Payload:`, payload);
-
       const firstIssue = payload.issues?.[0];
       const alertMessage = firstIssue
         ? `แจ้งเตือนความเสี่ยง: ${firstIssue.riskLevel ?? "ไม่ระบุ"}\n${firstIssue.issueDescription ?? ""}`
         : "พบความเสี่ยงทางกฎหมาย";
 
-      console.log(`🔔 Alert!`, alertMessage);
+      // console.log(`🔔 Alert!`, alertMessage);
       alert(alertMessage);
     };
 

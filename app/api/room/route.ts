@@ -73,6 +73,28 @@ export async function POST(req: Request) {
       throw new Error(`Thread creation failed: ${err}`);
     }
 
+    const ANALYSIS_OUTPUT_FORMAT = {
+      instruction:
+        "รูปแบบผลลัพธ์ที่ต้องแสดง: แยกแต่ละกรณีหรือแต่ละประเด็นอย่างชัดเจน ในแต่ละกรณี ต้องมีข้อมูลดังต่อไปนี้: ระดับความเสี่ยง (ต่ำ/กลาง/สูง), คำอธิบายพฤติการณ์, ฐานกฎหมาย, เหตุผลทางกฎหมาย, ข้อเสนอแนะ, ระดับความเร่งด่วน, และข้อความข้อจำกัด: 'ความเห็นนี้เป็นการประเมินเบื้องต้นในเชิงกระบวนการ ไม่ครอบคลุมข้อเท็จจริงเฉพาะบุคคลหรือเอกสารภายนอก' ผลลัพธ์ต้องแสดงในรูปแบบ JSON เท่านั้น",
+      schema: {
+        issues: [
+          {
+            riskLevel: "ต่ำ | กลาง | สูง",
+            issueDescription: "",
+            legalBasis: {
+              type: "มาตรา | หลักเกณฑ์จากเอกสาร | ไม่พบกฎหมายที่เกี่ยวข้อง",
+              reference: "",
+            },
+            legalReasoning: "",
+            recommendation: "",
+            urgencyLevel: "ต่ำ | กลาง | สูง",
+            disclaimer:
+              "ความเห็นนี้เป็นการประเมินเบื้องต้นในเชิงกระบวนการ ไม่ครอบคลุมข้อเท็จจริงเฉพาะบุคคลหรือเอกสารภายนอก",
+          },
+        ],
+      },
+    };
+
     // 5️⃣ Create Assistant (ตามที่คุณต้องการ)
     const assistantRes = await fetch(
       `${process.env.LANGGRAPH_URL}/assistants`,
@@ -84,6 +106,16 @@ export async function POST(req: Request) {
           graph_id: "retrieval_agent",
           context: {
             companyType: companyType,
+            outputFOrmat: ANALYSIS_OUTPUT_FORMAT,
+          },
+          config: {
+            configurable: {
+              searchKwargs: {
+                filter: {
+                  category: companyType,
+                },
+              },
+            },
           },
         }),
       },
