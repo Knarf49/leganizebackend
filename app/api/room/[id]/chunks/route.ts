@@ -4,6 +4,11 @@ import { redis } from "@/lib/redis";
 import { runRiskDetector } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
 import { emitLegalEvent } from "@/sse";
+import { OpenAI } from "openai";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 type AnalyzerIssue = {
   riskLevel?: string;
@@ -18,7 +23,7 @@ type AnalyzerIssue = {
   disclaimer?: string;
 };
 
-const BUFFER_SIZE = 3; // วิเคราะห์ทุก 3 chunk
+const BUFFER_SIZE = 3;
 const COOLDOWN_MS = 60_000; // แจ้งเตือนได้ไม่ถี่กว่า 1 นาที
 
 export async function POST(
@@ -41,21 +46,58 @@ export async function POST(
     const accessToken = auth.replace("Bearer ", "");
 
     /* --------------------------------
-       2️⃣ Parse body
+       2️⃣ Parse body (JSON or FormData with audio file)
     -------------------------------- */
-    const body = await req.json();
-    const { text, isFinal = true } = body as {
-      text?: string;
-      isFinal?: boolean;
-    };
+    let text: string;
 
-    if (!text || typeof text !== "string") {
-      return NextResponse.json({ error: "text is required" }, { status: 400 });
-    }
+    try {
+      const contentType = req.headers.get("content-type") || "";
+      if (!contentType.includes("multipart/form-data")) {
+        return NextResponse.json(
+          { error: "ต้องส่ง FormData เท่านั้น" },
+          { status: 400 },
+        );
+      }
+      const formData = await req.formData();
+      const audioFile = formData.get("audio") as File | null;
 
-    // ignore partial transcript
-    if (!isFinal) {
-      return NextResponse.json({ ok: true });
+      if (!audioFile) {
+        return NextResponse.json(
+          { error: "audio file is required" },
+          { status: 400 },
+        );
+      }
+
+      if (!audioFile.type.startsWith("audio/")) {
+        return NextResponse.json(
+          { error: "File must be audio format" },
+          { status: 400 },
+        );
+      }
+
+      // Transcribe audio using Whisper
+      console.log(`🎤 Transcribing audio file: ${audioFile.name}`);
+      const arrayBuffer = await audioFile.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      const transcription = await openai.audio.transcriptions.create({
+        file: new File([buffer], audioFile.name, { type: audioFile.type }),
+        model: "whisper-1",
+        language: "th", // Thai language
+      });
+
+      text = transcription.text;
+      console.log(`✅ Transcription complete: ${text}`);
+
+      // if (!isFinal) {
+      //   return NextResponse.json({ ok: true, text });
+      // }
+    } catch (formError) {
+      console.error("FormData parsing error:", formError);
+      return NextResponse.json(
+        { error: "Failed to parse audio file" },
+        { status: 400 },
+      );
     }
 
     /* --------------------------------
