@@ -1,6 +1,8 @@
 import express from "express";
 import next from "next";
 import { addClient, removeClient } from "./sse";
+import { createServer } from "http";
+import { initializeWebSocketServer } from "./websocket";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT ?? 3000);
@@ -9,7 +11,9 @@ const handle = nextApp.getRequestHandler();
 
 nextApp.prepare().then(() => {
   const app = express();
+  const httpServer = createServer(app);
 
+  initializeWebSocketServer(httpServer);
   app.get("/room/:id/events", (req, res) => {
     const roomId = req.params.id;
     console.log(`🔌 SSE client connecting to room: ${roomId}`);
