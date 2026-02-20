@@ -1,5 +1,3 @@
-export const runtime = "edge";
-
 import "dotenv/config";
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server as HTTPServer } from "http";
