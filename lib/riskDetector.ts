@@ -8,10 +8,7 @@ const model = new ChatOpenAI({
   temperature: 0,
 });
 
-export type CompanyTypeInput =
-  | CompanyType
-  | "บริษัทจำกัด"
-  | "บริษัทมหาชนจำกัด";
+export type CompanyTypeInput = CompanyType | "บริษัทจำกัด" | "บริษัทมหาชนจำกัด";
 
 // แปลง enum CompanyType เป็น Thai label
 function companyTypeToThai(
