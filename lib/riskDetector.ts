@@ -1,19 +1,21 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import "dotenv/config";
+import type { CompanyType } from "@/generated/prisma/enums";
 
 const model = new ChatOpenAI({
   model: "gpt-4o-mini",
   temperature: 0,
 });
 
+export type CompanyTypeInput =
+  | CompanyType
+  | "บริษัทจำกัด"
+  | "บริษัทมหาชนจำกัด";
+
 // แปลง enum CompanyType เป็น Thai label
 function companyTypeToThai(
-  companyType:
-    | "LIMITED"
-    | "PUBLIC_LIMITED"
-    | "บริษัทจำกัด"
-    | "บริษัทมหาชนจำกัด",
+  companyType: CompanyTypeInput,
 ): "บริษัทจำกัด" | "บริษัทมหาชนจำกัด" {
   const mapping: Record<string, "บริษัทจำกัด" | "บริษัทมหาชนจำกัด"> = {
     LIMITED: "บริษัทจำกัด",
@@ -26,11 +28,7 @@ function companyTypeToThai(
 
 export async function runRiskDetector(
   buffer: string[],
-  companyType:
-    | "LIMITED"
-    | "PUBLIC_LIMITED"
-    | "บริษัทจำกัด"
-    | "บริษัทมหาชนจำกัด",
+  companyType: CompanyTypeInput,
 ): Promise<boolean> {
   try {
     const transcript = buffer.join("\n");

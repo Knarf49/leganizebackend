@@ -122,7 +122,10 @@ export async function POST(req: Request) {
         );
 
         // If it's our own thrown error, re-throw it
-        if (fetchError.message?.includes("Thread creation failed:")) {
+        if (
+          fetchError instanceof Error &&
+          fetchError.message?.includes("Thread creation failed:")
+        ) {
           throw fetchError;
         }
 
@@ -188,7 +191,7 @@ export async function POST(req: Request) {
           config: {
             configurable: {
               context: {
-                companyType: companyType,
+                companyType: COMPANY_TYPE_LABELS[enumValue],
                 outputFormat: ANALYSIS_OUTPUT_FORMAT,
               },
             },
@@ -232,7 +235,11 @@ export async function POST(req: Request) {
       {
         error: "Failed to create room",
         details:
-          process.env.NODE_ENV === "development" ? error.message : undefined,
+          process.env.NODE_ENV === "development"
+            ? error instanceof Error
+              ? error.message
+              : String(error)
+            : undefined,
       },
       { status: 500 },
     );

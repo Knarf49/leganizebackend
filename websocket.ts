@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { Server as HTTPServer } from "http";
 import { prisma } from "@/lib/prisma";
 import { redis } from "@/lib/redis";
-import { runRiskDetector } from "@/lib/riskDetector";
+import { runRiskDetector, type CompanyTypeInput } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
 import { writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { join } from "path";
@@ -362,7 +362,7 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
 async function processTranscriptAnalysis(
   roomId: string,
   text: string,
-  companyType: string,
+  companyType: CompanyTypeInput,
   threadId: string,
 ) {
   // Existing buffer management and risk analysis logic
