@@ -3,6 +3,9 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Install Python for transcribe script
+RUN apk add --no-cache python3 py3-pip
+
 # Add build arguments for environment variables needed during build
 ARG OPENAI_API_KEY=dummy-key-for-build
 
@@ -38,8 +41,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install dumb-init for proper signal handling
-RUN apk add --no-cache dumb-init
+# Install dumb-init and Python for transcribe script
+RUN apk add --no-cache dumb-init python3
 
 # Copy package files
 COPY package*.json ./
@@ -63,14 +66,11 @@ COPY server.ts .
 COPY websocket.ts .
 COPY sse.ts .
 
-# Create startup script for migrations
-RUN echo '#!/bin/sh\nset -e\necho "Running Prisma migrations..."\nnpx prisma migrate deploy\necho "Starting application..."\nexec npm start' > /app/start.sh && chmod +x /app/start.sh
-
 # Expose port
 EXPOSE 3000
 
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["/usr/sbin/dumb-init", "--"]
 
-# Start application with migrations
-CMD ["/app/start.sh"]
+# Start application (with migrations via postinstall script in npm start)
+CMD ["sh", "-c", "npx prisma migrate deploy && npm start"]

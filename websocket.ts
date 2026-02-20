@@ -289,7 +289,10 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
     let text = "";
     try {
       // Call Python transcribe script
-      const pythonPath = join(process.cwd(), ".venv", "Scripts", "python");
+      // Use system python for compatibility (Linux/Docker uses /usr/bin/python3, Windows uses venv)
+      const pythonPath = process.platform === "win32" 
+        ? join(process.cwd(), ".venv", "Scripts", "python.exe")
+        : "python3";
       const scriptPath = join(process.cwd(), "lib", "transcribe.py");
       const openaiApiKey = process.env.OPENAI_API_KEY;
 
