@@ -3,9 +3,6 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install Python for transcribe script
-RUN apk add --no-cache python3 py3-pip
-
 # Add build arguments for environment variables needed during build
 ARG OPENAI_API_KEY=dummy-key-for-build
 
@@ -41,8 +38,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install dumb-init and Python for transcribe script
-RUN apk add --no-cache dumb-init python3
+# Install dumb-init for proper signal handling
+RUN apk add --no-cache dumb-init
 
 # Copy package files
 COPY package*.json ./
@@ -65,6 +62,7 @@ COPY --from=builder /app/generated ./generated
 COPY server.ts .
 COPY websocket.ts .
 COPY sse.ts .
+COPY lib ./lib
 
 # Expose port
 EXPOSE 3000

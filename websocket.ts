@@ -5,9 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { redis } from "@/lib/redis";
 import { runRiskDetector, type CompanyTypeInput } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
+import { transcribeAudio } from "@/lib/transcribe";
 import { writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { join } from "path";
-import { execSync } from "child_process";
+// import { execSync } from "child_process"; // Old: for Python script
 
 //TODO: ทำให้มัน detect legal risk ในแต่ละ chunk เลย
 type AudioChunkMessage = {
@@ -288,18 +289,29 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
 
     let text = "";
     try {
-      // Call Python transcribe script
+      // Call TypeScript transcribe function
+      const openaiApiKey = process.env.OPENAI_API_KEY;
+
+      if (!openaiApiKey) {
+        throw new Error("OPENAI_API_KEY not set in environment");
+      }
+
+      const result = await transcribeAudio(tempPath, openaiApiKey);
+
+      if (result.success && result.text) {
+        text = result.text;
+        console.log(`✅ Transcribed (${item.timestamp}): ${text}`);
+      } else {
+        throw new Error(result.error || "Transcription failed");
+      }
+
+      /* OLD: Python script approach
       // Use system python for compatibility (Linux/Docker uses /usr/bin/python3, Windows uses venv)
       const pythonPath =
         process.platform === "win32"
           ? join(process.cwd(), ".venv", "Scripts", "python.exe")
           : "python3";
       const scriptPath = join(process.cwd(), "lib", "transcribe.py");
-      const openaiApiKey = process.env.OPENAI_API_KEY;
-
-      if (!openaiApiKey) {
-        throw new Error("OPENAI_API_KEY not set in environment");
-      }
 
       const output = execSync(
         `"${pythonPath}" "${scriptPath}" "${tempPath}" "${openaiApiKey}"`,
@@ -317,6 +329,7 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
       } else {
         throw new Error(result.error);
       }
+      */
     } finally {
       // Clean up temp file
       try {
