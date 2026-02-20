@@ -6,17 +6,25 @@ import { readFileSync } from "fs";
  */
 export async function transcribeAudio(
   audioPath: string,
-  apiKey: string
-): Promise<{ success: boolean; text?: string; error?: string; language?: string }> {
+  apiKey: string,
+): Promise<{
+  success: boolean;
+  text?: string;
+  error?: string;
+  language?: string;
+}> {
   try {
     console.error("🔄 Initializing OpenAI client...");
     const client = new OpenAI({ apiKey });
 
     console.error(`🎤 Transcribing audio: ${audioPath}`);
-    
+
     // Read audio file
     const audioBuffer = readFileSync(audioPath);
-    const audioFile = new File([audioBuffer], audioPath.split('/').pop() || 'audio.webm');
+    const audioFile = new File(
+      [audioBuffer],
+      audioPath.split("/").pop() || "audio.webm",
+    );
 
     // Call OpenAI Whisper API
     const transcription = await client.audio.transcriptions.create({
@@ -37,7 +45,7 @@ export async function transcribeAudio(
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error(`❌ Transcription error: ${errorMsg}`);
-    
+
     return {
       success: false,
       error: errorMsg,
@@ -48,13 +56,13 @@ export async function transcribeAudio(
 // CLI usage support
 if (require.main === module) {
   const args = process.argv.slice(2);
-  
+
   if (args.length < 2) {
     console.log(
       JSON.stringify({
         success: false,
         error: "Usage: tsx transcribe.ts <audio_file_path> <api_key>",
-      })
+      }),
     );
     process.exit(1);
   }
@@ -71,7 +79,7 @@ if (require.main === module) {
         JSON.stringify({
           success: false,
           error: error.message,
-        })
+        }),
       );
       process.exit(1);
     });
