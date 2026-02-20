@@ -63,11 +63,14 @@ COPY server.ts .
 COPY websocket.ts .
 COPY sse.ts .
 
+# Create startup script for migrations
+RUN echo '#!/bin/sh\nset -e\necho "Running Prisma migrations..."\nnpx prisma migrate deploy\necho "Starting application..."\nexec npm start' > /app/start.sh && chmod +x /app/start.sh
+
 # Expose port
 EXPOSE 3000
 
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["/usr/sbin/dumb-init", "--"]
 
-# Start application
-CMD ["npm", "start"]
+# Start application with migrations
+CMD ["/app/start.sh"]
