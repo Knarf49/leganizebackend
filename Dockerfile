@@ -17,6 +17,8 @@ COPY components ./components
 COPY lib ./lib
 COPY public ./public
 COPY prisma ./prisma
+COPY sse.ts .
+COPY websocket.ts .
 
 # Install dependencies
 RUN npm ci
