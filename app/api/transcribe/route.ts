@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mkdirSync, writeFileSync, unlinkSync } from "fs";
+import { writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
 import { execSync } from "child_process";
 
 export async function POST(request: NextRequest) {
@@ -16,16 +17,11 @@ export async function POST(request: NextRequest) {
       `🎤 [Transcribe API] Received file: ${file.name}, size: ${file.size}`,
     );
 
-    // Create temp file
-    const tempDir = join(process.cwd(), "tmp");
+    // Create temp file using OS temp directory
+    const tempDir = tmpdir(); // Use OS temp directory for deployment compatibility
     const tempPath = join(tempDir, `audio_${Date.now()}.webm`);
 
-    // Ensure temp directory exists
-    try {
-      mkdirSync(tempDir, { recursive: true });
-    } catch (e) {
-      // dir might already exist
-    }
+    // OS temp directory should already exist, no need to create
 
     // Save uploaded file to temp location
     const buffer = await file.arrayBuffer();

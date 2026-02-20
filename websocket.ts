@@ -6,8 +6,9 @@ import { redis } from "@/lib/redis";
 import { runRiskDetector, type CompanyTypeInput } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
 import { transcribeAudio } from "@/lib/transcribe";
-import { writeFileSync, unlinkSync, mkdirSync } from "fs";
+import { writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
 // import { execSync } from "child_process"; // Old: for Python script
 
 //TODO: ทำให้มัน detect legal risk ในแต่ละ chunk เลย
@@ -261,7 +262,7 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
     const audioBuffer = Buffer.from(audio, "base64");
 
     // Save audio to temp file with proper extension based on MIME type
-    const tempDir = join(process.cwd(), "tmp");
+    const tempDir = tmpdir(); // Use OS temp directory for deployment compatibility
 
     // Determine file extension from MIME type
     let extension = "webm"; // default
@@ -278,12 +279,6 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
     }
 
     const tempPath = join(tempDir, `audio_${Date.now()}.${extension}`);
-
-    try {
-      mkdirSync(tempDir, { recursive: true });
-    } catch (e) {
-      // dir might already exist
-    }
 
     writeFileSync(tempPath, audioBuffer);
 
