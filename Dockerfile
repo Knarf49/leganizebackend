@@ -3,6 +3,9 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Add build arguments for environment variables needed during build
+ARG OPENAI_API_KEY=dummy-key-for-build
+
 # Copy package files
 COPY package*.json ./
 COPY tsconfig.json ./
@@ -23,7 +26,8 @@ COPY websocket.ts .
 # Install dependencies
 RUN npm ci
 
-# Build Next.js
+# Build Next.js with environment variable
+ENV OPENAI_API_KEY=${OPENAI_API_KEY}
 RUN npm run build
 
 # Generate Prisma Client
