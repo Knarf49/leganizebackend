@@ -344,12 +344,12 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
        3️⃣ Continue with existing analysis logic
     ======================== */
     // Save to DB
-    await prisma.transcriptChunk.create({
-      data: {
-        roomId,
-        content: text,
-      },
-    });
+    // await prisma.transcriptChunk.create({
+    //   data: {
+    //     roomId,
+    //     content: text,
+    //   },
+    // });
 
     // Continue with buffer management and risk analysis...
     await processTranscriptAnalysis(
