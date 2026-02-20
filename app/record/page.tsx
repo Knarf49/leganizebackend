@@ -228,19 +228,21 @@ function AudioRecorder({
 
       mediaRecorder.onstop = async () => {
         console.log("⏹️ Recording stopped");
-        if (allChunksRef.current.length > 0) {
-          const mimeType = mediaRecorder.mimeType;
-          const audioBlob = new Blob(allChunksRef.current, { type: mimeType });
 
-          // Validate final chunk size
-          if (audioBlob.size >= 30 * 1024) {
-            await transcribeAudioChunk(audioBlob);
-          } else {
-            console.log(
-              `⚠️ Final audio chunk too small (${audioBlob.size} bytes), skipping...`,
-            );
-          }
+        const totalSize = allChunksRef.current.reduce(
+          (sum, c) => sum + c.size,
+          0,
+        );
+        const remainingSize = totalSize - sentSizeRef.current;
+
+        // ส่งเฉพาะถ้ามี data ใหม่ที่ยังไม่ได้ส่ง
+        if (remainingSize >= 30 * 1024) {
+          const mimeType = mediaRecorderRef.current?.mimeType ?? "";
+          const audioBlob = new Blob(allChunksRef.current, { type: mimeType });
+          await transcribeAudioChunk(audioBlob);
         }
+
+        // clear หลัง await เสร็จ
         allChunksRef.current = [];
         sentSizeRef.current = 0;
       };
