@@ -38,8 +38,14 @@ RUN apk add --no-cache dumb-init
 # Copy package files
 COPY package*.json ./
 
-# Install only production dependencies
+# Copy prisma schema BEFORE npm install (for postinstall script)
+COPY prisma ./prisma
+
+# Install only production dependencies and run postinstall
 RUN npm ci --only=production && npm cache clean --force
+
+# Ensure Prisma Client is generated
+RUN npx prisma generate
 
 # Copy built application from builder
 COPY --from=builder /app/.next ./.next
@@ -50,9 +56,6 @@ COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY server.ts .
 COPY websocket.ts .
 COPY sse.ts .
-
-# Copy prisma schema
-COPY prisma ./prisma
 
 # Expose port
 EXPOSE 3000
