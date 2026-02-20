@@ -29,6 +29,7 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
+    "react-use-audio-recorder": "^0.4.2",
     "redis": "^5.10.0",
     "tailwind-merge": "^3.4.0",
     "tailwindcss-animate": "^1.0.7",

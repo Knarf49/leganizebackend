@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
-//TODO: test ระบบ record เสียง
+//TODO: change from normal recorder to react-use-recorder
+//TODO: ให้ console.log type ของ file ตอนอัดเสียงเสร็จ
 function AudioRecorder({
   roomId,
   accessToken,
@@ -16,8 +17,44 @@ function AudioRecorder({
   const [status, setStatus] = useState("Ready");
   const [legalRisks, setLegalRisks] = useState<any[]>([]);
   const [transcripts, setTranscripts] = useState<string[]>([]);
+  const allChunksRef = useRef<Blob[]>([]);
+  const sentSizeRef = useRef<number>(0);
 
-  const MAX_CHUNK_SIZE = 512 * 1024; // 512KB (smaller for testing)
+  const CHUNK_SIZE = 200 * 1024; // 200KB chunks - balance between latency and file integrity
+
+  // Helper to ensure WebSocket is connected
+  const ensureWebSocketConnected = async (): Promise<WebSocket> => {
+    return new Promise((resolve, reject) => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        resolve(wsRef.current);
+        return;
+      }
+
+      // Wait for connection with longer timeout
+      const timeout = setTimeout(() => {
+        reject(new Error("WebSocket connection timeout after 15 seconds"));
+      }, 15000); // Increased to 15 seconds
+
+      const checkConnection = () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          clearTimeout(timeout);
+          resolve(wsRef.current!);
+        } else if (
+          wsRef.current?.readyState === WebSocket.CLOSED ||
+          wsRef.current?.readyState === WebSocket.CLOSING
+        ) {
+          // WebSocket is closed/closing, reject immediately
+          clearTimeout(timeout);
+          reject(new Error("WebSocket is closed or closing"));
+        } else {
+          // Still connecting, wait more
+          setTimeout(checkConnection, 200);
+        }
+      };
+
+      checkConnection();
+    });
+  };
 
   useEffect(() => {
     // Only connect if we have valid credentials
@@ -25,12 +62,18 @@ function AudioRecorder({
       return;
     }
 
-    // Connect to WebSocket
+    // Prevent duplicate connections
+    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+      console.log("⚠️ WebSocket already exists, skipping new connection");
+      return;
+    }
+
+    // Connect to WebSocket (for legal risk analysis)
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const host = window.location.host;
     const wsUrl = `${protocol}://${host}/ws?roomId=${roomId}&accessToken=${accessToken}`;
 
-    console.log(`🔌 Connecting to WebSocket: ${wsUrl}`);
+    console.log(`🔌 Creating NEW WebSocket connection: ${wsUrl}`);
 
     let ws: WebSocket;
     try {
@@ -41,19 +84,18 @@ function AudioRecorder({
     }
 
     ws.onopen = () => {
-      console.log("✅ WebSocket connected");
       setStatus("Connected");
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log("📨 Message from server:", data);
-
         if (data.type === "connected") {
           setStatus("Connected");
+        } else if (data.type === "queue-status") {
+          setStatus(`📋 ${data.message}`);
         } else if (data.type === "transcribing") {
-          setStatus("🎤 Transcribing audio...");
+          setStatus(data.message || "🎤 Transcribing audio...");
         } else if (data.type === "transcribed") {
           setStatus(`✅ Transcribed: ${data.text}`);
           setTranscripts((prev) => [...prev, data.text]);
@@ -66,7 +108,6 @@ function AudioRecorder({
         } else if (data.type === "cooldown-active") {
           setStatus("⏱️ Cooldown active, please wait...");
         } else if (data.type === "legal-risk") {
-          console.log("🚨 Legal risk alert:", data);
           setStatus("🚨 Legal Risks Found!");
           setLegalRisks(data.issues || []);
         } else if (data.type === "analysis-complete") {
@@ -84,73 +125,127 @@ function AudioRecorder({
     };
 
     ws.onerror = (event) => {
-      console.error("❌ WebSocket error event:", event);
-      const wsError = event as Event;
-      console.error("Error details:", {
-        type: wsError.type,
-        target: (wsError.target as WebSocket)?.readyState,
-      });
-      console.error("Full ws state:", {
-        readyState: ws.readyState,
-        url: ws.url,
-        protocol: ws.protocol,
-      });
+      console.error("❌ WebSocket error:", event);
       setStatus("❌ WebSocket connection error");
     };
 
     ws.onclose = () => {
-      console.log("🔌 WebSocket disconnected");
-      setStatus("❌ Disconnected from server");
+      setStatus("⚠️ WebSocket disconnected, attempting reconnect...");
+
+      // Auto-reconnect after 2 seconds
+      setTimeout(() => {
+        if (!roomId || !accessToken) return;
+
+        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+        const host = window.location.host;
+        const wsUrl = `${protocol}://${host}/ws?roomId=${roomId}&accessToken=${accessToken}`;
+
+        try {
+          const newWs = new WebSocket(wsUrl);
+          wsRef.current = newWs;
+          // Re-attach handlers...
+          newWs.onopen = () => {
+            setStatus("Connected");
+          };
+          newWs.onerror = () => setStatus("❌ WebSocket connection error");
+          newWs.onclose = () => setStatus("❌ WebSocket disconnected");
+        } catch (error) {
+          console.error("❌ Reconnect failed:", error);
+        }
+      }, 2000);
     };
 
     wsRef.current = ws;
 
     return () => {
+      console.log("🔌 Cleaning up WebSocket connection");
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close();
+        ws.close(1000, "Component unmounting");
       }
     };
-  }, [roomId, accessToken]);
+  }, [roomId, accessToken]); // Only re-run when room credentials change
 
   const startRecording = async () => {
     try {
       console.log("🎙️ Start recording clicked");
+      allChunksRef.current = [];
+      sentSizeRef.current = 0;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       console.log("✅ Got audio stream");
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm;codecs=opus",
-      });
+      // Try different audio formats in order of compatibility
+      // const mimeType = "audio/mp4";
+      const mimeType = "audio/webm;codecs=opus";
 
-      const chunks: Blob[] = [];
+      const mediaRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      console.log(
+        `🎤 Using MediaRecorder with mimeType: ${mediaRecorder.mimeType}`,
+      );
+
+      // const chunks: Blob[] = [];
 
       mediaRecorder.ondataavailable = async (event) => {
+        if (event.data.size === 0) return;
         console.log(
-          `📦 ondataavailable triggered, event.data.size: ${event.data.size}`
+          `📦 ondataavailable triggered, event.data.size: ${event.data.size}`,
         );
-        chunks.push(event.data);
+
+        allChunksRef.current.push(event.data);
 
         // Check if accumulated size exceeds threshold
-        const totalSize = chunks.reduce((sum, chunk) => sum + chunk.size, 0);
-        console.log(`📊 Total accumulated size: ${totalSize} bytes`);
+        const totalSize = allChunksRef.current.reduce(
+          (sum, chunk) => sum + chunk.size,
+          0,
+        );
+        const newDataSize = totalSize - sentSizeRef.current;
+        // console.log(`📊 Total accumulated size: ${newDataSize} bytes`);
 
-        if (totalSize >= MAX_CHUNK_SIZE) {
-          console.log(`🚀 Size threshold reached, sending...`);
-          const audioBlob = new Blob(chunks, { type: "audio/webm" });
-          await sendAudioChunk(audioBlob, false);
-          chunks.length = 0; // Clear chunks
+        if (newDataSize >= CHUNK_SIZE) {
+          console.log(
+            `🚀 Size threshold reached, sending to transcribe API...`,
+          );
+          // Determine format based on what was actually used
+          const mimeType = mediaRecorder.mimeType;
+          const audioBlob = new Blob(allChunksRef.current, { type: mimeType });
+
+          // Validate audio blob size (minimum 30KB for meaningful transcription)
+          if (audioBlob.size < 30 * 1024) {
+            console.log(
+              `⚠️ Audio chunk too small (${audioBlob.size} bytes), skipping...`,
+            );
+            return;
+          }
+
+          if (audioBlob.size >= 30 * 1024) {
+            await transcribeAudioChunk(audioBlob);
+            sentSizeRef.current = totalSize; // update ว่าส่งไปถึงไหนแล้ว
+          }
         }
       };
 
       mediaRecorder.onstop = async () => {
-        console.log(`⏹️ Recording stopped, remaining chunks: ${chunks.length}`);
-        if (chunks.length > 0) {
-          const audioBlob = new Blob(chunks, { type: "audio/webm" });
-          await sendAudioChunk(audioBlob, true);
+        console.log("⏹️ Recording stopped");
+        if (allChunksRef.current.length > 0) {
+          const mimeType = mediaRecorder.mimeType;
+          const audioBlob = new Blob(allChunksRef.current, { type: mimeType });
+
+          // Validate final chunk size
+          if (audioBlob.size >= 30 * 1024) {
+            await transcribeAudioChunk(audioBlob);
+          } else {
+            console.log(
+              `⚠️ Final audio chunk too small (${audioBlob.size} bytes), skipping...`,
+            );
+          }
         }
+        allChunksRef.current = [];
+        sentSizeRef.current = 0;
       };
 
-      mediaRecorder.start(100); // Collect data every 100ms
+      mediaRecorder.start(250); // Collect data every 250ms for lower latency
       console.log("🔴 MediaRecorder started");
       mediaRecorderRef.current = mediaRecorder;
       setIsRecording(true);
@@ -174,63 +269,54 @@ function AudioRecorder({
     }
   };
 
-  const sendAudioChunk = async (blob: Blob, isFinal: boolean) => {
-    console.log(`🔍 sendAudioChunk called, checking WS Connection...`, {
-      wsRef: !!wsRef.current,
-      readyState: wsRef.current?.readyState,
-      OPEN: WebSocket.OPEN,
-      isOpen: wsRef.current?.readyState === WebSocket.OPEN,
-    });
-
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.error("❌ WebSocket not connected", {
-        wsRef: !!wsRef.current,
-        readyState: wsRef.current?.readyState,
-      });
-      setStatus("WebSocket not connected");
-      return;
-    }
-
+  const transcribeAudioChunk = async (blob: Blob) => {
     try {
-      console.log(
-        `📤 Sending audio chunk: ${blob.size} bytes, isFinal: ${isFinal}`,
-      );
+      console.log(`🎤 Sending audio chunk via WebSocket: ${blob.size} bytes`);
+      setStatus("⏳ Checking WebSocket connection...");
 
-      // Convert blob to base64 using FileReader (more reliable for large files)
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result as string;
-          const base64Data = result.split(',')[1];
-          console.log(`✅ Base64 encoded: ${base64Data.length} chars`);
-          resolve(base64Data);
-        };
-        reader.onerror = (error) => {
-          console.error(`❌ FileReader error:`, error);
-          reject(error);
-        };
-        reader.readAsDataURL(blob);
-      });
+      // Wait for WebSocket to be ready
+      try {
+        const ws = await ensureWebSocketConnected();
+        setStatus("🎤 Sending audio for transcription...");
 
-      const message = {
-        type: "audio-chunk",
-        roomId,
-        accessToken,
-        audio: base64,
-        isFinal,
-      };
+        // Convert blob to base64
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            const base64Data = result.split(",")[1];
+            resolve(base64Data);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
 
-      console.log("📍 WebSocket state before send:", {
-        readyState: wsRef.current.readyState,
-        open: wsRef.current.readyState === WebSocket.OPEN,
-      });
-      
-      wsRef.current.send(JSON.stringify(message));
-      console.log(`✅ Audio message sent to WebSocket`);
-      setStatus(`Sent ${blob.size} bytes`);
+        // Send via WebSocket
+        ws.send(
+          JSON.stringify({
+            type: "audio-chunk",
+            roomId,
+            accessToken,
+            audio: base64,
+            mimeType: blob.type, // Include the MIME type for proper file extension
+            isFinal: false,
+          }),
+        );
+
+        console.log(`✅ Audio chunk sent via WebSocket`);
+        setStatus("📡 Audio sent, waiting for transcription...");
+      } catch (connectionError) {
+        console.error("❌ WebSocket connection failed:", connectionError);
+        setStatus(
+          `❌ Connection Error: ${connectionError instanceof Error ? connectionError.message : "Unknown"}`,
+        );
+        return;
+      }
     } catch (error) {
       console.error("❌ Error sending audio chunk:", error);
-      setStatus("Error sending audio");
+      setStatus(
+        `❌ Error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
     }
   };
 
@@ -336,7 +422,7 @@ export default function RecordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+    <div className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100 p-8">
       <div className="max-w-2xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-8">
           <h1 className="text-3xl font-bold mb-8 text-gray-800">

@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import next from "next";
 import { addClient, removeClient } from "./sse";
@@ -13,7 +14,9 @@ nextApp.prepare().then(() => {
   const app = express();
   const httpServer = createServer(app);
 
+  console.log("🚀 Initializing WebSocket server...");
   initializeWebSocketServer(httpServer);
+  console.log("✅ WebSocket server initialized");
   app.get("/room/:id/events", (req, res) => {
     const roomId = req.params.id;
     console.log(`🔌 SSE client connecting to room: ${roomId}`);
@@ -48,7 +51,7 @@ nextApp.prepare().then(() => {
 
   app.use((req, res) => handle(req, res));
 
-  app.listen(port, () => {
+  httpServer.listen(port, () => {
     console.log(`Server ready on http://localhost:${port}`);
   });
 });

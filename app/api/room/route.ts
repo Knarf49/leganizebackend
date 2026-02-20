@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { randomUUID } from "crypto";
-import { context } from "langchain";
 
 const ALLOWED_COMPANY_TYPES = ["LIMITED", "PUBLIC_LIMITED"] as const;
 const COMPANY_TYPE_LABELS = {
@@ -12,7 +11,12 @@ const COMPANY_TYPE_LABELS = {
 type CompanyType = (typeof ALLOWED_COMPANY_TYPES)[number];
 
 export async function POST(req: Request) {
+  const startTime = Date.now();
+  let roomId: string | undefined;
+
   try {
+    console.log(`🏁 Room creation started at ${new Date().toISOString()}`);
+
     // 1️⃣ Parse body
     const body = await req.json();
     const { companyType } = body as { companyType?: string };
@@ -43,9 +47,11 @@ export async function POST(req: Request) {
     }
 
     // 2️⃣ Generate IDs
-    const roomId = randomUUID();
+    roomId = randomUUID();
     const threadId = randomUUID();
     const accessToken = randomUUID();
+
+    console.log(`🏗️  Generated room: ${roomId}, thread: ${threadId}`);
 
     // 3️⃣ Create Room
     const room = await prisma.room.create({
@@ -58,19 +64,91 @@ export async function POST(req: Request) {
       },
     });
 
-    // 4️⃣ Create Thread
-    const threadRes = await fetch(`${process.env.LANGGRAPH_URL}/threads`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        thread_id: threadId,
-      }),
-    });
+    console.log(`✅ Room created in database: ${roomId}`);
 
-    if (!threadRes.ok) {
-      const err = await threadRes.text();
-      await prisma.room.delete({ where: { id: roomId } });
-      throw new Error(`Thread creation failed: ${err}`);
+    // 4️⃣ Create Thread with retry mechanism
+    let threadRes;
+    let retryCount = 0;
+    const maxRetries = 3;
+    let roomDeleted = false; // Track if room has been deleted
+
+    while (retryCount < maxRetries) {
+      try {
+        threadRes = await fetch(`${process.env.LANGGRAPH_URL}/threads`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            thread_id: threadId,
+          }),
+        });
+
+        if (threadRes.ok) {
+          break; // Success, exit retry loop
+        }
+
+        const errorText = await threadRes.text();
+        console.log(
+          `Thread creation attempt ${retryCount + 1} failed:`,
+          errorText,
+        );
+
+        // If it's a transaction error, retry after delay
+        if (
+          threadRes.status === 500 &&
+          errorText.includes("failed to begin transaction")
+        ) {
+          retryCount++;
+          if (retryCount < maxRetries) {
+            console.log(
+              `Retrying thread creation in ${retryCount * 1000}ms...`,
+            );
+            await new Promise((resolve) =>
+              setTimeout(resolve, retryCount * 1000),
+            );
+            continue;
+          }
+        }
+
+        // For other errors, don't retry - cleanup and throw
+        if (!roomDeleted) {
+          await prisma.room.delete({ where: { id: roomId } });
+          roomDeleted = true;
+        }
+        throw new Error(`Thread creation failed: ${errorText}`);
+      } catch (fetchError) {
+        console.log(
+          `Thread creation network error attempt ${retryCount + 1}:`,
+          fetchError,
+        );
+
+        // If it's our own thrown error, re-throw it
+        if (fetchError.message?.includes("Thread creation failed:")) {
+          throw fetchError;
+        }
+
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          if (!roomDeleted) {
+            await prisma.room.delete({ where: { id: roomId } });
+            roomDeleted = true;
+          }
+          throw new Error(
+            `Thread creation failed after ${maxRetries} attempts: ${fetchError}`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, retryCount * 1000));
+      }
+    }
+
+    if (!threadRes || !threadRes.ok) {
+      const err = (await threadRes?.text()) || "Unknown error";
+      if (!roomDeleted) {
+        await prisma.room.delete({ where: { id: roomId } });
+        roomDeleted = true;
+      }
+      throw new Error(
+        `Thread creation failed after ${maxRetries} attempts: ${err}`,
+      );
     }
 
     const ANALYSIS_OUTPUT_FORMAT = {
@@ -95,7 +173,10 @@ export async function POST(req: Request) {
       },
     };
 
+    console.log(`🧵 Thread created successfully: ${threadId}`);
+
     // 5️⃣ Create Assistant (ตามที่คุณต้องการ)
+    console.log(`🤖 Creating assistant for room: ${roomId}`);
     const assistantRes = await fetch(
       `${process.env.LANGGRAPH_URL}/assistants`,
       {
@@ -118,12 +199,20 @@ export async function POST(req: Request) {
 
     if (!assistantRes.ok) {
       const err = await assistantRes.text();
+      console.error(`❌ Assistant creation failed for room ${roomId}:`, err);
 
       // rollback ทั้งหมด
       await prisma.room.delete({ where: { id: roomId } });
 
       throw new Error(`Assistant creation failed: ${err}`);
     }
+
+    console.log(`🤖 Assistant creation successful for room: ${roomId}`);
+
+    const duration = Date.now() - startTime;
+    console.log(
+      `🎉 Room creation completed successfully in ${duration}ms: ${roomId}`,
+    );
 
     return NextResponse.json(
       {
@@ -135,10 +224,16 @@ export async function POST(req: Request) {
       { status: 201 },
     );
   } catch (error) {
-    console.error("Create room error:", error);
+    const duration = Date.now() - startTime;
+    console.error(`❌ Create room error after ${duration}ms:`, error);
+    console.error(`❌ Room ID: ${roomId || "not created"}`);
 
     return NextResponse.json(
-      { error: "Failed to create room" },
+      {
+        error: "Failed to create room",
+        details:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      },
       { status: 500 },
     );
   }
