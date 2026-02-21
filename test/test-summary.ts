@@ -41,7 +41,7 @@ async function testSummarize() {
     console.log("\n📝 Generating summary with LangChain...");
     console.log("   - Fixing transcription errors");
     console.log("   - Summarizing content");
-    
+
     // Call the summary function (it will update the database)
     await callAgentForSummary(TEST_ROOM_ID, TEST_TRANSCRIPT);
 
@@ -60,11 +60,10 @@ async function testSummarize() {
     console.log("\n📄 **Generated Summary:**\n");
     console.log(updatedRoom?.finalSummary || "No summary found");
     console.log("\n" + "=".repeat(60));
-    
+
     console.log("\n📊 Room Status:");
     console.log(`   Status: ${updatedRoom?.status}`);
     console.log(`   Ended At: ${updatedRoom?.endedAt?.toISOString()}`);
-    
   } catch (error) {
     console.error("\n❌ Test failed:");
     if (error instanceof Error) {
@@ -84,7 +83,7 @@ async function testSummarize() {
     } catch (cleanupError) {
       console.error("Warning: Failed to cleanup test room:", cleanupError);
     }
-    
+
     await prisma.$disconnect();
   }
 }

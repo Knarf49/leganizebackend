@@ -52,7 +52,7 @@ export async function callAgentForSummary(
 
     // Initialize OpenAI Chat Model
     const model = new ChatOpenAI({
-      modelName: "gpt-4o-mini", // หรือใช้ "gpt-4" สำหรับผลลัพธ์ดีกว่า
+      modelName: "gpt-4", // หรือใช้ "gpt-4" สำหรับผลลัพธ์ดีกว่า
       temperature: 0.3, // ต่ำหน่อยเพื่อให้ได้ผลลัพธ์ที่สม่ำเสมอ
       openAIApiKey: process.env.OPENAI_API_KEY,
     });
