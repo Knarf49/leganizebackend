@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+//TODO: ทำให้สามารถ disconnect websocket แล้วรอ process queue ให้หมด แล้วเอา chunk สุดท้ายไปให้ llm summary
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },

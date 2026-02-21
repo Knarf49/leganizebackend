@@ -6,6 +6,10 @@ import { redis } from "@/lib/redis";
 import { runRiskDetector, type CompanyTypeInput } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
 import { transcribeAudio } from "@/lib/transcribe";
+import {
+  callAgentForSummary,
+  waitForTranscriptionComplete,
+} from "@/lib/agentSummary";
 import { writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -163,12 +167,78 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
       }
     });
 
-    ws.on("close", () => {
-      // console.log(`❌ WebSocket disconnected from room: ${roomId}`);
+    ws.on("close", async () => {
+      console.log(`❌ WebSocket disconnected from room: ${roomId}`);
+
       const set = wsClients.get(roomId);
       set?.delete(client);
+
+      // If this was the last client in the room, handle final processing
       if (set?.size === 0) {
         wsClients.delete(roomId);
+        console.log(
+          `🔄 Last client disconnected from room ${roomId}, starting final processing`,
+        );
+
+        try {
+          // Wait for all transcription queues to complete
+          const finalTranscriptText =
+            await waitForTranscriptionComplete(roomId);
+
+          if (finalTranscriptText && finalTranscriptText.trim().length > 0) {
+            console.log(
+              `📝 Final transcript collected for room ${roomId}, calling agent for summary`,
+            );
+
+            // Broadcast processing status
+            broadcastToRoom(roomId, {
+              type: "finalizing",
+              message: "กำลังสรุป...",
+              timestamp: new Date().toISOString(),
+            });
+
+            // Call agent for summary (async, will callback via webhook)
+            await callAgentForSummary(roomId, finalTranscriptText);
+
+            console.log(`✅ Summary processing initiated for room ${roomId}`);
+          } else {
+            console.log(
+              `⚠️ No transcript text found for room ${roomId}, marking as ended without summary`,
+            );
+
+            // Update room status without summary
+            await prisma.room.update({
+              where: { id: roomId },
+              data: {
+                status: "ENDED",
+                endedAt: new Date(),
+                finalSummary: "ไม่มีข้อความที่จะสรุป",
+              },
+            });
+          }
+        } catch (error) {
+          console.error(
+            `❌ Error during final processing for room ${roomId}:`,
+            error,
+          );
+
+          // Update room with error status
+          try {
+            await prisma.room.update({
+              where: { id: roomId },
+              data: {
+                status: "ENDED",
+                endedAt: new Date(),
+                finalSummary: `ข้อผิดพลาด: ${error instanceof Error ? error.message : "Unknown error"}`,
+              },
+            });
+          } catch (dbError) {
+            console.error(
+              `❌ Failed to update room status for ${roomId}:`,
+              dbError,
+            );
+          }
+        }
       }
     });
 
@@ -190,6 +260,7 @@ async function processTranscriptionQueue(roomId: string) {
   }
 
   roomQueue.processing = true;
+  let lastTranscribedText = "";
 
   try {
     while (roomQueue.queue.length > 0) {
@@ -207,11 +278,27 @@ async function processTranscriptionQueue(roomId: string) {
         timestamp: item.timestamp,
       });
 
-      // Process this transcription item
-      await processSingleTranscription(item);
+      // Process this transcription item and get the transcribed text
+      const transcribedText = await processSingleTranscription(item);
+      if (transcribedText) {
+        lastTranscribedText = transcribedText; // Keep the latest/most complete transcription
+      }
 
       // Small delay to prevent API rate limiting
       await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    // Save only the last (most complete) transcribed text to database
+    if (lastTranscribedText.trim()) {
+      console.log(
+        `💾 Saving final transcribed text to DB for room ${roomId}: ${lastTranscribedText.substring(0, 100)}...`,
+      );
+      await prisma.transcriptChunk.create({
+        data: {
+          roomId,
+          content: lastTranscribedText,
+        },
+      });
     }
   } catch (error) {
     console.error(`❌ Queue processing error for room ${roomId}:`, error);
@@ -231,19 +318,21 @@ async function processTranscriptionQueue(roomId: string) {
 
 /**
  * Process a single transcription item
+ * @returns {Promise<string>} The transcribed text
  */
-async function processSingleTranscription(item: TranscriptionQueueItem) {
+async function processSingleTranscription(
+  item: TranscriptionQueueItem,
+): Promise<string> {
   const { audio, mimeType, roomId, accessToken } = item;
 
   try {
     /* ========================
-       1️⃣ Validate room (quick check)
+       1️⃣ Validate room (don't check status - allow processing even after ENDED)
     ======================== */
     const room = await prisma.room.findFirst({
       where: {
         id: roomId,
         accessToken,
-        status: "ACTIVE",
       },
       select: {
         id: true,
@@ -341,16 +430,8 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
     });
 
     /* ========================
-       3️⃣ Continue with existing analysis logic
+       3️⃣ Continue with existing analysis logic (don't save to DB yet)
     ======================== */
-    // Save to DB
-    // await prisma.transcriptChunk.create({
-    //   data: {
-    //     roomId,
-    //     content: text,
-    //   },
-    // });
-
     // Continue with buffer management and risk analysis...
     await processTranscriptAnalysis(
       roomId,
@@ -358,6 +439,9 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
       room.companyType,
       room.threadId,
     );
+
+    // Return the transcribed text for potential saving later
+    return text;
   } catch (error) {
     console.error(`❌ Error processing transcription item:`, error);
     broadcastToRoom(roomId, {
@@ -365,6 +449,7 @@ async function processSingleTranscription(item: TranscriptionQueueItem) {
       message: "Failed to transcribe audio",
       error: error instanceof Error ? error.message : "Unknown error",
     });
+    return ""; // Return empty string on error
   }
 }
 

@@ -19,6 +19,7 @@ export async function GET(
         startedAt: true,
         endedAt: true,
         finalSummary: true,
+        companyType: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -28,7 +29,7 @@ export async function GET(
       return NextResponse.json({ error: "Room not found" }, { status: 404 });
     }
 
-    return NextResponse.json(room);
+    return NextResponse.json({ room });
   } catch (error) {
     console.error("GET room error:", error);
     return NextResponse.json(

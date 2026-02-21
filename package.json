@@ -8,6 +8,7 @@
     "start": "tsx server.ts",
     "lint": "eslint",
     "test:risk": "tsx test-risk-detector.ts",
+    "test:agent": "tsx test/test-agent-summary.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
