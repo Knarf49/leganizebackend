@@ -1,4 +1,6 @@
 import { prisma } from "@/lib/prisma";
+import { ChatOpenAI } from "@langchain/openai";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 
 // Access the global transcription queues (declared in websocket.ts)
 // No need to re-declare, just use it
@@ -6,44 +8,34 @@ const transcriptionQueues =
   (globalThis as any).__transcriptionQueues ??
   new Map<string, { queue: any[]; processing: boolean }>();
 
-// Agent API types
-interface AgentPayload {
-  assistant_id: string;
-  input: {
-    transcript: string;
-    roomId: string;
-  };
-  command: {
-    update: null;
-    resume: null;
-    goto: {
-      node: string;
-      input: null;
-    };
-  };
-  metadata: {
-    roomId: string;
-  };
-  config: {
-    tags: string[];
-    recursion_limit: number;
-    configurable: Record<string, any>;
-  };
-  context: Record<string, any>;
-  webhook: string;
-  stream_mode: string[];
-  feedback_keys: string[];
-  stream_subgraphs: boolean;
-  stream_resumable: boolean;
-  on_completion: string;
-  on_disconnect: string;
-  after_seconds: number;
-  checkpoint_during: boolean;
-  durability: string;
-}
+const SUMMARIZE_PROMPT = `คุณคือผู้ช่วยสรุปการประชุมที่มีความเชี่ยวชาญด้านกฎหมายบริษัท
+
+งานของคุณคือ:
+1. แก้ไขคำผิดจากการ transcribe เสียงเป็นข้อความ (เช่น "เงินไข่" แก้เป็น "อย่างไร", "คราดแสง" แก้เป็น "คะแนนเสียง", "เลิกตั้ง" แก้เป็น "เลือกตั้ง")
+2. สรุปเนื้อหาการประชุมอย่างชัดเจนและกระชับ
+3. เน้นประเด็นสำคัญ เช่น วาระการประชุม มติที่ได้ ผู้เข้าร่วม เนื้อหาที่ประชุม และแผนงานต่อไป
+
+รูปแบบการสรุป:
+---
+**สรุปการประชุม**
+
+**หัวข้อหลัก:**
+- [วาระสำคัญ]
+
+**รายละเอียด:**
+[สรุปเนื้อหาหลักที่ถูกต้องและชัดเจน]
+
+**มติ/ข้อสรุป:**
+- [มติหรือข้อตกลงที่ได้]
+
+**การดำเนินการต่อไป:**
+- [แผนงานหรือสิ่งที่ต้องทำต่อไป]
+---
+
+กรุณาสรุปข้อความต่อไปนี้:`;
 
 /**
- * Call the agent API to generate a summary from the transcribed text
+ * Generate summary using LangChain LLM directly
  */
 export async function callAgentForSummary(
   roomId: string,
@@ -51,106 +43,60 @@ export async function callAgentForSummary(
 ): Promise<void> {
   try {
     console.log(
-      `🤖 Calling agent for room ${roomId}, text length: ${transcriptText.length}`,
+      `🤖 Generating summary for room ${roomId}, text length: ${transcriptText.length}`,
     );
 
-    // Get the base URL for webhook
-    const baseUrl = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : process.env.NODE_ENV === "production"
-        ? "https://leganize.onrender.com"
-        : "http://localhost:3000";
-
-    const webhookUrl = `${baseUrl}/api/webhook/summary`;
-
-    // Prepare the agent API call
-    const agentPayload: AgentPayload = {
-      assistant_id: "fe096781-5601-53d2-b2f6-0d3403f7e9ca", // Set this in your environment
-      input: {
-        transcript: transcriptText,
-        roomId: roomId,
-      },
-      command: {
-        update: null,
-        resume: null,
-        goto: {
-          node: "",
-          input: null,
-        },
-      },
-      metadata: {
-        roomId: roomId,
-      },
-      config: {
-        tags: ["summary"],
-        recursion_limit: 1,
-        configurable: {},
-      },
-      context: {},
-      webhook: webhookUrl,
-      stream_mode: ["values"],
-      feedback_keys: [""],
-      stream_subgraphs: false,
-      stream_resumable: false,
-      on_completion: "delete",
-      on_disconnect: "continue",
-      after_seconds: 1,
-      checkpoint_during: false,
-      durability: "async",
-    };
-
-    console.log(`🌐 Calling agent API with webhook: ${webhookUrl}`);
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-    try {
-      const response = await fetch("https://leganize.onrender.com/runs", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(agentPayload),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `Agent API call failed: ${response.status} ${response.statusText} - ${errorText}`,
-        );
-      }
-
-      const result = await response.json();
-      console.log(`✅ Agent API call initiated for room ${roomId}`, result);
-
-      // Update room status to indicate processing
-      await prisma.room.update({
-        where: { id: roomId },
-        data: {
-          status: "ENDED", // Room is ended, processing summary
-          endedAt: new Date(),
-        },
-      });
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
+    if (!transcriptText || transcriptText.trim().length === 0) {
+      throw new Error("No transcript text to summarize");
     }
-  } catch (error) {
-    console.error(`❌ Failed to call agent for room ${roomId}:`, error);
 
-    // Update room with error status
+    // Initialize OpenAI Chat Model
+    const model = new ChatOpenAI({
+      modelName: "gpt-4o-mini", // หรือใช้ "gpt-4" สำหรับผลลัพธ์ดีกว่า
+      temperature: 0.3, // ต่ำหน่อยเพื่อให้ได้ผลลัพธ์ที่สม่ำเสมอ
+      openAIApiKey: process.env.OPENAI_API_KEY,
+    });
+
+    console.log(`📝 Calling LLM to fix typos and summarize...`);
+
+    // Call LLM with system and user messages
+    const messages = [
+      new SystemMessage(SUMMARIZE_PROMPT),
+      new HumanMessage(transcriptText),
+    ];
+
+    const response = await model.invoke(messages);
+    const summaryText = response.content as string;
+
+    console.log(
+      `✅ Summary generated for room ${roomId}, length: ${summaryText.length}`,
+    );
+
+    // Update room with final summary
     await prisma.room.update({
       where: { id: roomId },
       data: {
-        finalSummary: `ข้อผิดพลาด: ไม่สามารถสรุปข้อมูลได้ (${error instanceof Error ? error.message : "Unknown error"})`,
+        finalSummary: summaryText,
         status: "ENDED",
         endedAt: new Date(),
       },
     });
 
+    console.log(`✅ Room ${roomId} updated with summary`);
+  } catch (error) {
+    console.error(`❌ Failed to generate summary for room ${roomId}:`, error);
+
+    // Update room with error status
+    await prisma.room.update({
+      where: { id: roomId },
+      data: {
+        finalSummary: `ข้อผิดพลาด: ไม่สามารถสรุปข้อมูลได้\n\nรายละเอียด: ${error instanceof Error ? error.message : "Unknown error"}\n\nข้อความต้นฉบับ:\n${transcriptText}`,
+        status: "ENDED",
+        endedAt: new Date(),
+      },
+    });
+
+    throw error;
     throw error;
   }
 }
