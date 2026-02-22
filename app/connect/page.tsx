@@ -27,7 +27,12 @@ export default function RoomMonitor({
 
   // Connect WebSocket (browser)
   useEffect(() => {
-    const url = `ws://localhost:3000/ws?type=browser&roomId=${roomId}&accessToken=${accessToken}`;
+    const wsBaseUrl =
+      process.env.NODE_ENV === "production"
+        ? "wss://leganizebackend.onrender.com"
+        : "ws://localhost:3000";
+
+    const url = `${wsBaseUrl}/ws?type=browser&roomId=${roomId}&accessToken=${accessToken}`;
     ws.current = new WebSocket(url);
 
     ws.current.onmessage = (event) => {
@@ -41,9 +46,14 @@ export default function RoomMonitor({
 
   // กดเชื่อม ESP32 → ส่ง config ไปให้
   const linkDevice = async (deviceId: string) => {
+    const wsBaseUrl =
+      process.env.NODE_ENV === "production"
+        ? "wss://leganizebackend.onrender.com"
+        : "ws://localhost:3000";
+
     // เปิด WS connection พิเศษเพื่อส่ง config
     const configWs = new WebSocket(
-      `ws://localhost:3000/ws?type=browser&roomId=${roomId}&accessToken=${accessToken}&targetDeviceId=${deviceId}`,
+      `${wsBaseUrl}/ws?type=browser&roomId=${roomId}&accessToken=${accessToken}&targetDeviceId=${deviceId}`,
     );
 
     configWs.onopen = () => {
