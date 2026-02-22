@@ -604,47 +604,57 @@ async function processTranscriptAnalysis(
     Array.isArray((analyzerResult as { issues?: unknown[] }).issues) &&
     (analyzerResult as { issues: unknown[] }).issues.length > 0
   ) {
-    // console.log(
-    //   `🚨 Found ${(analyzerResult as { issues: unknown[] }).issues.length} legal issues`,
-    // );
+    const allIssues = (analyzerResult as { issues: AnalyzerIssue[] }).issues;
 
-    const issues = (analyzerResult as { issues: AnalyzerIssue[] }).issues;
+    // Filter out issues with "ไม่พบกฎหมายที่เกี่ยวข้อง"
+    const validIssues = allIssues.filter(
+      (issue) => issue.legalBasis?.type !== "ไม่พบกฎหมายที่เกี่ยวข้อง",
+    );
 
-    /* ========================
-       Save to database
-    ======================== */
-    // console.log(`💾 Saving legal risks to database...`);
-    await prisma.legalRisk.createMany({
-      data: issues.map((issue) => ({
+    if (validIssues.length > 0) {
+      console.log(`🚨 Found ${validIssues.length} valid legal issues`);
+
+      /* ========================
+         Save to database
+      ======================== */
+      await prisma.legalRisk.createMany({
+        data: validIssues.map((issue) => ({
+          roomId,
+          riskLevel: issue.riskLevel ?? "ไม่ระบุ",
+          issueDescription: issue.issueDescription ?? "",
+          legalBasisType: issue.legalBasis?.type ?? "ไม่ระบุ",
+          legalBasisReference: issue.legalBasis?.reference ?? "",
+          legalReasoning: issue.legalReasoning ?? "",
+          recommendation: issue.recommendation ?? "",
+          urgencyLevel: issue.urgencyLevel ?? "ไม่ระบุ",
+          rawJson: issue,
+        })),
+      });
+
+      /* ========================
+         Broadcast to client
+      ======================== */
+      broadcastToRoom(roomId, {
+        type: "legal-risk",
         roomId,
-        riskLevel: issue.riskLevel ?? "ไม่ระบุ",
-        issueDescription: issue.issueDescription ?? "",
-        legalBasisType: issue.legalBasis?.type ?? "ไม่ระบุ",
-        legalBasisReference: issue.legalBasis?.reference ?? "",
-        legalReasoning: issue.legalReasoning ?? "",
-        recommendation: issue.recommendation ?? "",
-        urgencyLevel: issue.urgencyLevel ?? "ไม่ระบุ",
-        rawJson: issue,
-      })),
-    });
-    // console.log(`✅ Saved ${issues.length} legal risks`);
+        createdAt: new Date().toISOString(),
+        issues: validIssues,
+      });
 
-    /* ========================
-       Broadcast to client
-    ======================== */
-    // console.log(`📡 Broadcasting legal risks to room: ${roomId}`);
-    broadcastToRoom(roomId, {
-      type: "legal-risk",
-      roomId,
-      createdAt: new Date().toISOString(),
-      issues,
-    });
-
-    /* ========================
-       Set cooldown
-    ======================== */
-    // console.log(`⏰ Setting cooldown for room: ${roomId}`);
-    await redis.set(cooldownKey, Date.now().toString(), "PX", COOLDOWN_MS);
+      /* ========================
+         Set cooldown
+      ======================== */
+      await redis.set(cooldownKey, Date.now().toString(), "PX", COOLDOWN_MS);
+    } else {
+      console.log(
+        `ℹ️ No valid issues found (filtered out issues without legal basis)`,
+      );
+      broadcastToRoom(roomId, {
+        type: "analysis-complete",
+        hasRisks: false,
+        message: "Analysis complete - no critical issues found",
+      });
+    }
   } else {
     // console.log(`ℹ️ No issues found`);
     broadcastToRoom(roomId, {
