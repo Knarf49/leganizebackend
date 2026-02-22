@@ -13,7 +13,6 @@ import {
 import { writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-// import { execSync } from "child_process"; // Old: for Python script
 
 //TODO: ทำให้มัน detect legal risk ในแต่ละ chunk เลย
 type AudioChunkMessage = {
@@ -66,10 +65,16 @@ type WebSocketClient = {
   accessToken: string;
 };
 
+type PendingESP32 = {
+  ws: WebSocket;
+  deviceId: string;
+};
+
 declare global {
   var __wsClients: Map<string, Set<WebSocketClient>> | undefined;
   var __wss: WebSocketServer | undefined;
   var __transcriptionQueues: Map<string, RoomTranscriptionQueue> | undefined;
+  var __pendingESP32: Map<string, PendingESP32> | undefined;
 }
 
 const wsClients =
@@ -79,6 +84,10 @@ globalThis.__wsClients = wsClients;
 const transcriptionQueues =
   globalThis.__transcriptionQueues ?? new Map<string, RoomTranscriptionQueue>();
 globalThis.__transcriptionQueues = transcriptionQueues;
+
+const pendingESP32 =
+  globalThis.__pendingESP32 ?? new Map<string, PendingESP32>();
+globalThis.__pendingESP32 = pendingESP32;
 
 const wss: WebSocketServer = globalThis.__wss as WebSocketServer;
 
@@ -116,9 +125,49 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const roomId = url.searchParams.get("roomId");
     const accessToken = url.searchParams.get("accessToken");
+    const deviceId = url.searchParams.get("deviceId"); // ESP32 ส่งมา
+    const clientType = url.searchParams.get("type"); // "esp32" | "browser"
 
-    // console.log("🔍 Parsed params:", { roomId, accessToken });
+    // ESP32 ที่ยังไม่มี roomId → เข้า pending pool
+    if (clientType === "esp32" && !roomId && deviceId) {
+      pendingESP32.set(deviceId, { ws, deviceId });
+      console.log(`📡 ESP32 pending: ${deviceId}`);
 
+      ws.send(
+        JSON.stringify({
+          type: "waiting-for-config",
+          deviceId,
+        }),
+      );
+
+      ws.on("close", () => {
+        pendingESP32.delete(deviceId);
+        console.log(`❌ ESP32 disconnected from pending: ${deviceId}`);
+      });
+      return;
+    }
+
+    // Browser ส่ง config ไปให้ ESP32
+    if (clientType === "browser" && roomId) {
+      const targetDeviceId = url.searchParams.get("targetDeviceId");
+
+      if (targetDeviceId) {
+        const esp32 = pendingESP32.get(targetDeviceId);
+        if (esp32) {
+          // ส่ง roomId + accessToken ไปที่ ESP32
+          esp32.ws.send(
+            JSON.stringify({
+              type: "room-config",
+              roomId,
+              accessToken,
+              wsHost: req.headers.host,
+            }),
+          );
+          pendingESP32.delete(targetDeviceId);
+          console.log(`✅ Config sent to ESP32: ${targetDeviceId}`);
+        }
+      }
+    }
     if (!roomId || !accessToken) {
       // console.log(
       //   "❌ WebSocket connection failed: Missing roomId or accessToken",
@@ -246,8 +295,12 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
       // console.error(`WebSocket error for room ${roomId}:`, error);
     });
   });
+}
 
-  // console.log("🟢 WebSocket server initialized");
+export function getPendingESP32List() {
+  return Array.from(pendingESP32.values()).map((e) => ({
+    deviceId: e.deviceId,
+  }));
 }
 
 /**
