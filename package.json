@@ -20,6 +20,7 @@
     "crypto": "^1.0.1",
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
+    "franc-min": "^6.2.0",
     "ioredis": "^5.9.2",
     "langchain": "^1.2.21",
     "langsmith": "^0.5.2",

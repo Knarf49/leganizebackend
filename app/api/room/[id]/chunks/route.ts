@@ -5,6 +5,14 @@ import { runRiskDetector } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
 import { emitLegalEvent } from "@/sse";
 import { OpenAI } from "openai";
+import {
+  generateContextPrompt,
+  removeOverlap,
+  deduplicateAcrossChunks,
+  cleanTranscription,
+  filterNonThaiEnglishSentences,
+  filterLowConfidenceSegments,
+} from "@/lib/textProcessing";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -75,19 +83,75 @@ export async function POST(
         );
       }
 
-      // Transcribe audio using Whisper
+      /* --------------------------------
+         Transcribe with Context Management
+      -------------------------------- */
       console.log(`🎤 Transcribing audio file: ${audioFile.name}`);
+
+      // Get previous chunks for context
+      const contextKey = `room:${id}:context`;
+      const previousTexts = await redis.lrange(contextKey, 0, -1);
+
+      // Generate context prompt from previous transcriptions
+      const contextPrompt = generateContextPrompt(previousTexts);
+      console.log(`📝 Using context prompt: ${contextPrompt.slice(0, 50)}...`);
+
       const arrayBuffer = await audioFile.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
+      // Transcribe with verbose response for confidence filtering
       const transcription = await openai.audio.transcriptions.create({
         file: new File([buffer], audioFile.name, { type: audioFile.type }),
         model: "whisper-1",
-        language: "th", // Thai language
+        language: "th",
+        temperature: 0.0, // Reduce hallucination
+        response_format: "verbose_json",
+        prompt: contextPrompt,
       });
 
-      text = transcription.text;
+      // Filter low-confidence segments
+      let rawText: string;
+      if ("segments" in transcription && transcription.segments) {
+        console.log(`🔍 Filtering low-confidence segments...`);
+        rawText = filterLowConfidenceSegments(
+          transcription.segments as Array<{
+            text: string;
+            no_speech_prob?: number;
+          }>,
+          0.6, // Reject segments with >60% probability of no speech
+        );
+      } else {
+        rawText = transcription.text;
+      }
+
+      // Clean transcription
+      console.log(`🧹 Cleaning transcription...`);
+      rawText = cleanTranscription(rawText);
+
+      // Filter non-Thai/English content
+      console.log(`🌐 Filtering non-Thai/English content...`);
+      rawText = filterNonThaiEnglishSentences(rawText);
+
+      // Remove overlap with previous chunk
+      if (previousTexts.length > 0) {
+        console.log(`🔄 Removing overlap with previous chunk...`);
+        const lastChunk = previousTexts[previousTexts.length - 1];
+        rawText = removeOverlap(lastChunk, rawText);
+      }
+
+      // Deduplicate across all previous chunks
+      if (previousTexts.length > 0) {
+        console.log(`🔍 Deduplicating across previous chunks...`);
+        rawText = deduplicateAcrossChunks(rawText, previousTexts);
+      }
+
+      text = rawText.trim();
       console.log(`✅ Transcription complete: ${text}`);
+
+      // Store in context (keep last 5 chunks)
+      await redis.rpush(contextKey, text);
+      await redis.ltrim(contextKey, -5, -1);
+      await redis.expire(contextKey, 3600); // Expire after 1 hour
 
       // if (!isFinal) {
       //   return NextResponse.json({ ok: true, text });
