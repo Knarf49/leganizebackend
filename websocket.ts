@@ -166,8 +166,12 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
           pendingESP32.delete(targetDeviceId);
           console.log(`✅ Config sent to ESP32: ${targetDeviceId}`);
         }
+        // Close browser connection หลังส่ง config เสร็จ
+        ws.close(1000, "Config sent");
+        return;
       }
     }
+    
     if (!roomId || !accessToken) {
       // console.log(
       //   "❌ WebSocket connection failed: Missing roomId or accessToken",
