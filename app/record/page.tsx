@@ -477,13 +477,9 @@ export default function RecordPage() {
   };
 
   return (
-    <div
-      className="min-h-screen px-6 py-10"
-    >
+    <div className="min-h-screen px-6 py-10">
       <div className="mx-auto max-w-6xl grid gap-8 lg:grid-cols-[360px_1fr]">
-        <section
-          className="rounded-3xl border border-amber-100 bg-white/90 p-6 shadow-[0_18px_45px_-30px_rgba(15,23,42,0.6)] backdrop-blur"
-        >
+        <section className="rounded-3xl border border-amber-100 bg-white/90 p-6 shadow-[0_18px_45px_-30px_rgba(15,23,42,0.6)] backdrop-blur">
           <div className="flex items-center justify-between">
             <p className="text-xs uppercase tracking-[0.2em] text-amber-600">
               Create Room
@@ -492,9 +488,7 @@ export default function RecordPage() {
               Step 01
             </span>
           </div>
-          <h1
-            className="mt-4 text-2xl font-semibold"
-          >
+          <h1 className="mt-4 text-2xl font-semibold">
             เลือกประเภทบริษัทก่อนเริ่มประชุม
           </h1>
           <p className="mt-2 text-sm text-slate-600">
@@ -547,9 +541,7 @@ export default function RecordPage() {
           </form>
         </section>
 
-        <section
-          className="rounded-3xl border border-slate-200 bg-white/95 p-8 shadow-[0_22px_60px_-40px_rgba(15,23,42,0.6)]"
-        >
+        <section className="rounded-3xl border border-slate-200 bg-white/95 p-8 shadow-[0_22px_60px_-40px_rgba(15,23,42,0.6)]">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <h2
