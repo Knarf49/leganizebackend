@@ -2,6 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 //TODO: change from normal recorder to react-use-recorder
 //TODO: ให้ console.log type ของ file ตอนอัดเสียงเสร็จ
 function AudioRecorder({
@@ -329,20 +338,20 @@ function AudioRecorder({
       </div>
 
       <div className="flex gap-2">
-        <button
+        <Button
           onClick={startRecording}
           disabled={isRecording}
           className="px-4 py-2 bg-blue-500 text-white rounded disabled:opacity-50 hover:bg-blue-600"
         >
           Start Recording
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={stopRecording}
           disabled={!isRecording}
           className="px-4 py-2 bg-red-500 text-white rounded disabled:opacity-50 hover:bg-red-600"
         >
           Stop Recording
-        </button>
+        </Button>
       </div>
 
       {/* Transcript Display */}
@@ -410,6 +419,17 @@ export default function RecordPage() {
   const [roomId, setRoomId] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [isConnected, setIsConnected] = useState(false);
+  const [formData, setFormData] = useState<{
+    companyType: "บริษัทจำกัด" | "บริษัทมหาชนจำกัด";
+  }>({
+    companyType: "บริษัทจำกัด",
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitResult, setSubmitResult] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
 
   const handleConnect = () => {
     if (roomId.trim() && accessToken.trim()) {
@@ -423,73 +443,192 @@ export default function RecordPage() {
     setAccessToken("");
   };
 
+  const handleSubmit = async (event: React.SubmitEvent) => {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setSubmitError(null);
+    setSubmitResult(null);
+
+    try {
+      const res = await fetch("/api/room", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyType: formData.companyType }),
+      });
+
+      const data = (await res.json()) as Record<string, unknown>;
+
+      if (!res.ok) {
+        setSubmitError(
+          typeof data.error === "string" ? data.error : "Failed to create room",
+        );
+        setSubmitResult(data);
+        return;
+      }
+
+      setSubmitResult(data);
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error ? error.message : "Unexpected error",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-linear-to-br from-blue-50 to-indigo-100 p-8">
-      <div className="max-w-2xl mx-auto">
-        <div className="bg-white rounded-lg shadow-lg p-8">
-          <h1 className="text-3xl font-bold mb-8 text-gray-800">
-            Audio Recording & Legal Analysis
+    <div
+      className="min-h-screen px-6 py-10"
+    >
+      <div className="mx-auto max-w-6xl grid gap-8 lg:grid-cols-[360px_1fr]">
+        <section
+          className="rounded-3xl border border-amber-100 bg-white/90 p-6 shadow-[0_18px_45px_-30px_rgba(15,23,42,0.6)] backdrop-blur"
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-xs uppercase tracking-[0.2em] text-amber-600">
+              Create Room
+            </p>
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
+              Step 01
+            </span>
+          </div>
+          <h1
+            className="mt-4 text-2xl font-semibold"
+          >
+            เลือกประเภทบริษัทก่อนเริ่มประชุม
           </h1>
-
-          {!isConnected ? (
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Room ID
-                </label>
-                <Input
-                  type="text"
-                  placeholder="Enter room ID"
-                  value={roomId}
-                  onChange={(e) => setRoomId(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Access Token
-                </label>
-                <Input
-                  type="password"
-                  placeholder="Enter access token"
-                  value={accessToken}
-                  onChange={(e) => setAccessToken(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded"
-                />
-              </div>
-
-              <button
-                onClick={handleConnect}
-                disabled={!roomId.trim() || !accessToken.trim()}
-                className="w-full px-4 py-3 bg-indigo-600 text-white rounded font-semibold disabled:opacity-50 hover:bg-indigo-700 transition"
+          <p className="mt-2 text-sm text-slate-600">
+            ระบบจะสร้างห้องพร้อมโครงสร้างการวิเคราะห์ให้เหมาะกับประเภทบริษัทของคุณ
+          </p>
+          <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">
+                Company type
+              </label>
+              <Select
+                value={formData.companyType}
+                onValueChange={(value) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    companyType: value as "บริษัทจำกัด" | "บริษัทมหาชนจำกัด",
+                  }))
+                }
               >
-                Connect
-              </button>
+                <SelectTrigger className="w-full rounded-xl border-slate-200 bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="บริษัทจำกัด">บริษัทจำกัด</SelectItem>
+                    <SelectItem value="บริษัทมหาชนจำกัด">
+                      บริษัทมหาชนจำกัด
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
             </div>
-          ) : (
-            <div className="space-y-6">
-              <div className="bg-gray-100 p-4 rounded">
-                <p className="text-sm text-gray-600">
-                  <strong>Room ID:</strong> {roomId}
-                </p>
-                <p className="text-sm text-gray-600 mt-2">
-                  <strong>Access Token:</strong> {accessToken.substring(0, 10)}
-                  ...
-                </p>
-              </div>
+            <Button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full rounded-xl bg-amber-500 text-slate-900 hover:bg-amber-400"
+            >
+              {isSubmitting ? "Creating..." : "Create meeting room"}
+            </Button>
+            {submitError && (
+              <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                {submitError}
+              </p>
+            )}
+            {submitResult && (
+              <pre className="rounded-xl bg-slate-900/90 p-3 text-xs text-slate-100 overflow-x-auto">
+                {JSON.stringify(submitResult, null, 2)}
+              </pre>
+            )}
+          </form>
+        </section>
 
-              <AudioRecorder roomId={roomId} accessToken={accessToken} />
-
-              <button
-                onClick={handleDisconnect}
-                className="w-full px-4 py-2 bg-gray-500 text-white rounded font-semibold hover:bg-gray-600 transition"
+        <section
+          className="rounded-3xl border border-slate-200 bg-white/95 p-8 shadow-[0_22px_60px_-40px_rgba(15,23,42,0.6)]"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2
+                className="text-3xl font-semibold"
+                style={{ fontFamily: '"Fraunces", serif' }}
               >
-                Disconnect
-              </button>
+                Audio Recording & Legal Analysis
+              </h2>
+              <p className="mt-2 text-sm text-slate-600">
+                เชื่อมต่อห้องเพื่อเริ่มอัดเสียงและวิเคราะห์ความเสี่ยงทางกฎหมายแบบเรียลไทม์
+              </p>
             </div>
-          )}
-        </div>
+            <div className="rounded-2xl bg-slate-900 px-4 py-3 text-xs uppercase tracking-[0.18em] text-slate-100">
+              Live Session
+            </div>
+          </div>
+
+          <div className="mt-8">
+            {!isConnected ? (
+              <div className="grid gap-5">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Room ID
+                  </label>
+                  <Input
+                    type="text"
+                    placeholder="Enter room ID"
+                    value={roomId}
+                    onChange={(e) => setRoomId(e.target.value)}
+                    className="w-full rounded-xl border-slate-200 bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Access Token
+                  </label>
+                  <Input
+                    type="password"
+                    placeholder="Enter access token"
+                    value={accessToken}
+                    onChange={(e) => setAccessToken(e.target.value)}
+                    className="w-full rounded-xl border-slate-200 bg-white"
+                  />
+                </div>
+
+                <Button
+                  onClick={handleConnect}
+                  disabled={!roomId.trim() || !accessToken.trim()}
+                  className="w-full rounded-xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
+                >
+                  Connect
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm text-slate-600">
+                    <strong className="text-slate-700">Room ID:</strong>{" "}
+                    {roomId}
+                  </p>
+                  <p className="text-sm text-slate-600 mt-2">
+                    <strong className="text-slate-700">Access Token:</strong>{" "}
+                    {accessToken.substring(0, 10)}...
+                  </p>
+                </div>
+
+                <AudioRecorder roomId={roomId} accessToken={accessToken} />
+
+                <Button
+                  onClick={handleDisconnect}
+                  className="w-full rounded-xl bg-slate-200 text-slate-900 hover:bg-slate-300"
+                >
+                  Disconnect
+                </Button>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );
