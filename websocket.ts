@@ -608,7 +608,9 @@ async function processTranscriptAnalysis(
 
     // Filter out issues with "ไม่พบกฎหมายที่เกี่ยวข้อง"
     const validIssues = allIssues.filter(
-      (issue) => issue.legalBasis?.type !== "ไม่พบกฎหมายที่เกี่ยวข้อง",
+      (issue) =>
+        issue.legalBasis?.type !==
+        "ไม่พบบทบัญญัติกฎหมายหรือหลักเกณฑ์ที่เกี่ยวข้องในเอกสารที่ค้นพบ",
     );
 
     if (validIssues.length > 0) {
