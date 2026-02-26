@@ -1,11 +1,11 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 
 type PendingDevice = { deviceId: string };
 
-export default function RoomMonitor() {
+function RoomMonitorContent() {
   const searchParams = useSearchParams();
   const roomId = searchParams.get("roomId") || "";
   const accessToken = searchParams.get("accessToken") || "";
@@ -555,5 +555,26 @@ export default function RoomMonitor() {
         )}
       </div>
     </div>
+  );
+}
+
+// Loading component for Suspense fallback
+function LoadingComponent() {
+  return (
+    <div className="min-h-screen bg-linear-to-br from-slate-900 via-slate-800 to-slate-900 p-8 flex items-center justify-center">
+      <div className="text-center">
+        <div className="animate-spin h-12 w-12 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+        <p className="text-gray-300">กำลังโหลด...</p>
+      </div>
+    </div>
+  );
+}
+
+// Wrap with Suspense for useSearchParams
+export default function RoomMonitor() {
+  return (
+    <Suspense fallback={<LoadingComponent />}>
+      <RoomMonitorContent />
+    </Suspense>
   );
 }
