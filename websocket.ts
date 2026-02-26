@@ -31,7 +31,28 @@ type TranscribedAnalysisMessage = {
   text: string;
 };
 
-type WebSocketMessage = AudioChunkMessage | TranscribedAnalysisMessage;
+type StartRecordingMessage = {
+  type: "start-recording";
+  targetDeviceId: string;
+};
+
+type StopRecordingMessage = {
+  type: "stop-recording";
+  targetDeviceId: string;
+};
+
+type ESP32AudioChunkMessage = {
+  type: "esp32-audio-chunk";
+  roomId: string;
+  audio: string; // base64 encoded
+};
+
+type WebSocketMessage =
+  | AudioChunkMessage
+  | TranscribedAnalysisMessage
+  | StartRecordingMessage
+  | StopRecordingMessage
+  | ESP32AudioChunkMessage;
 
 type AnalyzerIssue = {
   riskLevel?: string;
@@ -63,6 +84,8 @@ type WebSocketClient = {
   ws: WebSocket;
   roomId: string;
   accessToken: string;
+  deviceId?: string; // For ESP32 clients
+  clientType?: string; // "browser" | "esp32"
 };
 
 type PendingESP32 = {
@@ -171,7 +194,7 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
         return;
       }
     }
-    
+
     if (!roomId || !accessToken) {
       // console.log(
       //   "❌ WebSocket connection failed: Missing roomId or accessToken",
@@ -182,7 +205,13 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
 
     // console.log(`✅ WebSocket client connecting to room: ${roomId}`);
 
-    const client: WebSocketClient = { ws, roomId, accessToken };
+    const client: WebSocketClient = {
+      ws,
+      roomId,
+      accessToken,
+      deviceId: deviceId || undefined,
+      clientType: clientType || undefined,
+    };
     const set = wsClients.get(roomId) ?? new Set<WebSocketClient>();
     set.add(client);
     wsClients.set(roomId, set);
@@ -208,6 +237,12 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
           await handleTranscribedAnalysisMessage(
             message as TranscribedAnalysisMessage,
           );
+        } else if (message.type === "start-recording") {
+          handleStartRecording(message as StartRecordingMessage, roomId);
+        } else if (message.type === "stop-recording") {
+          handleStopRecording(message as StopRecordingMessage, roomId);
+        } else if (message.type === "esp32-audio-chunk") {
+          handleESP32AudioChunk(message as ESP32AudioChunkMessage);
         }
       } catch (error) {
         // console.error("Failed to process WebSocket message:", error);
@@ -866,4 +901,122 @@ export function emitLegalEventWebSocket(roomId: string, data: any) {
     type: "legal-risk",
     ...data,
   });
+}
+
+/**
+ * Handle start recording command from browser - relay to ESP32
+ */
+function handleStartRecording(message: StartRecordingMessage, roomId: string) {
+  const { targetDeviceId } = message;
+
+  // Find ESP32 client in the room
+  const set = wsClients.get(roomId);
+  if (!set) {
+    console.log(`⚠️ No clients found in room: ${roomId}`);
+    return;
+  }
+
+  let esp32Client: WebSocketClient | undefined;
+  for (const client of set) {
+    if (client.deviceId === targetDeviceId && client.clientType === "esp32") {
+      esp32Client = client;
+      break;
+    }
+  }
+
+  if (!esp32Client) {
+    console.log(`⚠️ ESP32 ${targetDeviceId} not found in room ${roomId}`);
+    return;
+  }
+
+  // Send command to ESP32
+  try {
+    esp32Client.ws.send(
+      JSON.stringify({
+        type: "start-recording",
+        roomId,
+      }),
+    );
+    console.log(`🎙️ Sent start-recording command to ESP32: ${targetDeviceId}`);
+  } catch (error) {
+    console.error(`❌ Failed to send start-recording to ESP32:`, error);
+  }
+}
+
+/**
+ * Handle stop recording command from browser - relay to ESP32
+ */
+function handleStopRecording(message: StopRecordingMessage, roomId: string) {
+  const { targetDeviceId } = message;
+
+  // Find ESP32 client in the room
+  const set = wsClients.get(roomId);
+  if (!set) {
+    console.log(`⚠️ No clients found in room: ${roomId}`);
+    return;
+  }
+
+  let esp32Client: WebSocketClient | undefined;
+  for (const client of set) {
+    if (client.deviceId === targetDeviceId && client.clientType === "esp32") {
+      esp32Client = client;
+      break;
+    }
+  }
+
+  if (!esp32Client) {
+    console.log(`⚠️ ESP32 ${targetDeviceId} not found in room ${roomId}`);
+    return;
+  }
+
+  // Send command to ESP32
+  try {
+    esp32Client.ws.send(
+      JSON.stringify({
+        type: "stop-recording",
+        roomId,
+      }),
+    );
+    console.log(`⏹️ Sent stop-recording command to ESP32: ${targetDeviceId}`);
+  } catch (error) {
+    console.error(`❌ Failed to send stop-recording to ESP32:`, error);
+  }
+}
+
+/**
+ * Handle audio chunk from ESP32 - relay to browser clients
+ */
+function handleESP32AudioChunk(message: ESP32AudioChunkMessage) {
+  const { roomId, audio } = message;
+
+  console.log(`📦 Received audio chunk from ESP32 for room ${roomId}`);
+
+  // Broadcast to all browser clients in the room (not to ESP32)
+  const set = wsClients.get(roomId);
+  if (!set) {
+    console.log(`⚠️ No clients in room: ${roomId}`);
+    return;
+  }
+
+  const payload = JSON.stringify({
+    type: "esp32-audio-chunk",
+    audio,
+  });
+
+  let successCount = 0;
+  for (const client of set) {
+    // Only send to browser clients, not ESP32
+    if (client.clientType !== "esp32") {
+      try {
+        if (client.ws.readyState === WebSocket.OPEN) {
+          client.ws.send(payload);
+          successCount++;
+        }
+      } catch (error) {
+        console.error(`Failed to relay audio chunk to browser:`, error);
+      }
+    }
+  }
+
+  console.log(`✅ Relayed audio chunk to ${successCount} browser clients`);
 }
