@@ -187,10 +187,15 @@ function AudioRecorder({
             {
               text: fixThaiSpacing(data.text ?? ""),
               speakers: data.speakers?.map(
-                (s: { speakerTag: number; text: string; startTime: number; endTime: number }) => ({
+                (s: {
+                  speakerTag: number;
+                  text: string;
+                  startTime: number;
+                  endTime: number;
+                }) => ({
                   ...s,
                   text: fixThaiSpacing(s.text ?? ""),
-                })
+                }),
               ),
             },
           ]);
