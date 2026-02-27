@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { fixThaiSpacing } from "@/lib/textProcessing";
 import {
   Select,
   SelectContent,
@@ -11,8 +12,53 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-//TODO: change from normal recorder to react-use-recorder
-//TODO: ให้ console.log type ของ file ตอนอัดเสียงเสร็จ
+
+// Dynamic import for RecordRTC to avoid SSR issues
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let RecordRTC: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let StereoAudioRecorder: any = null;
+
+/**
+ * Merge multiple WAV blobs into a single valid WAV blob.
+ * Each RecordRTC ondataavailable slice is a complete WAV file with a 44-byte RIFF
+ * header. Naive Blob concatenation chains those headers together, creating an
+ * invalid file that Speech-to-Text silently rejects. This function keeps only the
+ * first blob's header and appends the raw PCM data from every blob, then patches
+ * the RIFF/data size fields so the result is a well-formed WAV.
+ */
+async function mergeWavBlobs(blobs: Blob[]): Promise<Blob> {
+  const WAV_HEADER_SIZE = 44;
+  if (blobs.length === 0) return new Blob([], { type: "audio/wav" });
+  if (blobs.length === 1) return blobs[0];
+
+  const buffers = await Promise.all(blobs.map((b) => b.arrayBuffer()));
+
+  // Total bytes of raw PCM across all blobs (header stripped from each)
+  const totalPcmSize = buffers.reduce(
+    (sum, buf) => sum + Math.max(0, buf.byteLength - WAV_HEADER_SIZE),
+    0,
+  );
+
+  // Clone the first blob's header so we can patch the size fields
+  const headerBuf = buffers[0].slice(0, WAV_HEADER_SIZE);
+  const view = new DataView(headerBuf);
+  // Bytes 4-7: RIFF chunk size = total file size - 8
+  view.setUint32(4, totalPcmSize + WAV_HEADER_SIZE - 8, true);
+  // Bytes 40-43: data sub-chunk size
+  view.setUint32(40, totalPcmSize, true);
+
+  const parts: BlobPart[] = [headerBuf as BlobPart];
+  for (const buf of buffers) {
+    if (buf.byteLength > WAV_HEADER_SIZE) {
+      parts.push(new Uint8Array(buf, WAV_HEADER_SIZE) as unknown as BlobPart);
+    }
+  }
+
+  return new Blob(parts, { type: "audio/wav" });
+}
+
+//TODO: แก้ error ตอน file เสียงรวมเกิน 1 min
 function AudioRecorder({
   roomId,
   accessToken,
@@ -21,11 +67,25 @@ function AudioRecorder({
   accessToken: string;
 }) {
   const wsRef = useRef<WebSocket | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recorderRef = useRef<any | null>(null);
+  const streamRef = useRef<MediaStream | null>(null); // keep stream separately for clean teardown
+  const isStoppingRef = useRef(false); // guard against stop/start race condition
   const [isRecording, setIsRecording] = useState(false);
   const [status, setStatus] = useState("Ready");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [legalRisks, setLegalRisks] = useState<any[]>([]);
-  const [transcripts, setTranscripts] = useState<string[]>([]);
+  const [transcripts, setTranscripts] = useState<
+    Array<{
+      text: string;
+      speakers?: Array<{
+        speakerTag: number;
+        text: string;
+        startTime: number;
+        endTime: number;
+      }>;
+    }>
+  >([]);
   const allChunksRef = useRef<Blob[]>([]);
   const sentSizeRef = useRef<number>(0);
 
@@ -71,6 +131,21 @@ function AudioRecorder({
       return;
     }
 
+    connectWebSocket();
+
+    return () => {
+      console.log("🔌 Cleaning up WebSocket connection");
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, "Component unmounting");
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, accessToken]); // Only re-run when room credentials change
+
+  function connectWebSocket() {
+    if (!roomId || !accessToken) return;
+
     // Prevent duplicate connections
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
       console.log("⚠️ WebSocket already exists, skipping new connection");
@@ -107,7 +182,18 @@ function AudioRecorder({
           setStatus(data.message || "🎤 Transcribing audio...");
         } else if (data.type === "transcribed") {
           setStatus(`✅ Transcribed: ${data.text}`);
-          setTranscripts((prev) => [...prev, data.text]);
+          setTranscripts((prev) => [
+            ...prev,
+            {
+              text: fixThaiSpacing(data.text ?? ""),
+              speakers: data.speakers?.map(
+                (s: { speakerTag: number; text: string; startTime: number; endTime: number }) => ({
+                  ...s,
+                  text: fixThaiSpacing(s.text ?? ""),
+                })
+              ),
+            },
+          ]);
         } else if (data.type === "analyzing") {
           setStatus("🔍 Checking for legal risks...");
         } else if (data.type === "deep-analyzing") {
@@ -140,125 +226,86 @@ function AudioRecorder({
 
     ws.onclose = () => {
       setStatus("⚠️ WebSocket disconnected, attempting reconnect...");
+      console.log("🔌 WebSocket closed, reconnecting in 2s...");
 
-      // Auto-reconnect after 2 seconds
-      setTimeout(() => {
-        if (!roomId || !accessToken) return;
-
-        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-        const host = window.location.host;
-        const wsUrl = `${protocol}://${host}/ws?roomId=${roomId}&accessToken=${accessToken}`;
-
-        try {
-          const newWs = new WebSocket(wsUrl);
-          wsRef.current = newWs;
-          // Re-attach handlers...
-          newWs.onopen = () => {
-            setStatus("Connected");
-          };
-          newWs.onerror = () => setStatus("❌ WebSocket connection error");
-          newWs.onclose = () => setStatus("❌ WebSocket disconnected");
-        } catch (error) {
-          console.error("❌ Reconnect failed:", error);
-        }
-      }, 2000);
+      // Auto-reconnect after 2 seconds — trigger the useEffect by clearing wsRef
+      // so the effect sees wsRef as null/closed and re-runs via a state change.
+      wsRef.current = null;
+      setTimeout(() => connectWebSocket(), 2000);
     };
 
     wsRef.current = ws;
-
-    return () => {
-      console.log("🔌 Cleaning up WebSocket connection");
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close(1000, "Component unmounting");
-      }
-    };
-  }, [roomId, accessToken]); // Only re-run when room credentials change
+  }
 
   const startRecording = async () => {
     try {
       console.log("🎙️ Start recording clicked");
+
+      // Dynamic import RecordRTC to avoid SSR issues
+      if (!RecordRTC) {
+        const recordRTCModule = await import("recordrtc");
+        RecordRTC = recordRTCModule.default;
+        StereoAudioRecorder = recordRTCModule.StereoAudioRecorder;
+        console.log("✅ RecordRTC loaded");
+      }
+
       allChunksRef.current = [];
       sentSizeRef.current = 0;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
       console.log("✅ Got audio stream");
 
-      // Try different audio formats in order of compatibility
-      // const mimeType = "audio/mp4";
-      const mimeType = "audio/webm;codecs=opus";
+      // Configure RecordRTC for Linear16 PCM at 16kHz
+      const recorder = new RecordRTC(stream, {
+        type: "audio",
+        mimeType: "audio/wav",
+        recorderType: StereoAudioRecorder,
+        numberOfAudioChannels: 1, // Mono for Google Cloud STT
+        desiredSampRate: 16000, // 16kHz sample rate for Linear16
+        timeSlice: 250, // Get data every 250ms
+        ondataavailable: async (blob: Blob) => {
+          if (blob.size === 0) return;
+          console.log(`📦 ondataavailable triggered, blob.size: ${blob.size}`);
 
-      const mediaRecorder = mimeType
-        ? new MediaRecorder(stream, { mimeType })
-        : new MediaRecorder(stream);
+          allChunksRef.current.push(blob);
 
-      console.log(
-        `🎤 Using MediaRecorder with mimeType: ${mediaRecorder.mimeType}`,
-      );
-
-      // const chunks: Blob[] = [];
-
-      mediaRecorder.ondataavailable = async (event) => {
-        if (event.data.size === 0) return;
-        console.log(
-          `📦 ondataavailable triggered, event.data.size: ${event.data.size}`,
-        );
-
-        allChunksRef.current.push(event.data);
-
-        // Check if accumulated size exceeds threshold
-        const totalSize = allChunksRef.current.reduce(
-          (sum, chunk) => sum + chunk.size,
-          0,
-        );
-        const newDataSize = totalSize - sentSizeRef.current;
-        // console.log(`📊 Total accumulated size: ${newDataSize} bytes`);
-
-        if (newDataSize >= CHUNK_SIZE) {
-          console.log(
-            `🚀 Size threshold reached, sending to transcribe API...`,
+          // Check if accumulated size exceeds threshold
+          const totalSize = allChunksRef.current.reduce(
+            (sum, chunk) => sum + chunk.size,
+            0,
           );
-          // Determine format based on what was actually used
-          const mimeType = mediaRecorder.mimeType;
-          const audioBlob = new Blob(allChunksRef.current, { type: mimeType });
+          const newDataSize = totalSize - sentSizeRef.current;
 
-          // Validate audio blob size (minimum 30KB for meaningful transcription)
-          if (audioBlob.size < 30 * 1024) {
+          if (newDataSize >= CHUNK_SIZE) {
             console.log(
-              `⚠️ Audio chunk too small (${audioBlob.size} bytes), skipping...`,
+              `🚀 Size threshold reached, sending to transcribe API...`,
             );
-            return;
-          }
 
-          if (audioBlob.size >= 30 * 1024) {
+            // Snapshot current chunks then reset so the next batch starts fresh.
+            // Merging is required because each 250ms slice is a complete WAV file
+            // with its own RIFF header — raw concatenation produces an invalid file.
+            const chunksToSend = allChunksRef.current.slice();
+            allChunksRef.current = [];
+            sentSizeRef.current = 0;
+
+            const audioBlob = await mergeWavBlobs(chunksToSend);
+
+            // Validate audio blob size (minimum 10KB for meaningful transcription)
+            if (audioBlob.size < 10 * 1024) {
+              console.log(
+                `⚠️ Audio chunk too small (${audioBlob.size} bytes), skipping...`,
+              );
+              return;
+            }
+
             await transcribeAudioChunk(audioBlob);
-            sentSizeRef.current = totalSize; // update ว่าส่งไปถึงไหนแล้ว
           }
-        }
-      };
+        },
+      });
 
-      mediaRecorder.onstop = async () => {
-        console.log("⏹️ Recording stopped");
-
-        const totalSize = allChunksRef.current.reduce(
-          (sum, c) => sum + c.size,
-          0,
-        );
-        const remainingSize = totalSize - sentSizeRef.current;
-
-        // ส่งเฉพาะถ้ามี data ใหม่ที่ยังไม่ได้ส่ง
-        if (remainingSize >= 30 * 1024) {
-          const mimeType = mediaRecorderRef.current?.mimeType ?? "";
-          const audioBlob = new Blob(allChunksRef.current, { type: mimeType });
-          await transcribeAudioChunk(audioBlob);
-        }
-
-        // clear หลัง await เสร็จ
-        allChunksRef.current = [];
-        sentSizeRef.current = 0;
-      };
-
-      mediaRecorder.start(250); // Collect data every 250ms for lower latency
-      console.log("🔴 MediaRecorder started");
-      mediaRecorderRef.current = mediaRecorder;
+      console.log("🎤 Starting RecordRTC with Linear16 PCM format");
+      recorder.startRecording();
+      recorderRef.current = recorder;
       setIsRecording(true);
       setStatus("Recording...");
       setLegalRisks([]);
@@ -269,14 +316,51 @@ function AudioRecorder({
     }
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream
-        .getTracks()
-        .forEach((track) => track.stop());
+  const stopRecording = async () => {
+    if (recorderRef.current && !isStoppingRef.current) {
+      console.log("⏹️ Stopping recording...");
+      isStoppingRef.current = true;
+
+      // Capture refs synchronously NOW before any async work,
+      // so a concurrent startRecording() cannot interfere.
+      const recorder = recorderRef.current;
+      const stream = streamRef.current;
+      recorderRef.current = null;
+      streamRef.current = null;
       setIsRecording(false);
       setStatus("Stopped");
+
+      recorder.stopRecording(async () => {
+        // ส่ง chunk สุดท้ายถ้ามีข้อมูลที่ยังไม่ได้ส่ง
+        // Snapshot chunks before clearing so a new recording cannot corrupt them.
+        const finalChunks = allChunksRef.current.slice();
+        allChunksRef.current = [];
+        sentSizeRef.current = 0;
+
+        if (finalChunks.length > 0) {
+          const audioBlob = await mergeWavBlobs(finalChunks);
+          if (audioBlob.size > 44 + 10 * 1024) {
+            await transcribeAudioChunk(audioBlob);
+          }
+        }
+
+        // Stop all microphone tracks
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+        } else {
+          // Fallback: try to stop via internal recorder
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const internalRecorder = recorder.getInternalRecorder() as any;
+          if (internalRecorder?.stream) {
+            internalRecorder.stream
+              .getTracks()
+              .forEach((track: MediaStreamTrack) => track.stop());
+          }
+        }
+
+        isStoppingRef.current = false;
+        console.log("✅ Recording stopped and cleaned up");
+      });
     }
   };
 
@@ -360,8 +444,8 @@ function AudioRecorder({
           <h3 className="font-bold text-blue-700 mb-3">
             📝 Transcription ({transcripts.length} chunks)
           </h3>
-          <div className="space-y-2 max-h-60 overflow-y-auto">
-            {transcripts.map((text, idx) => (
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {transcripts.map((transcript, idx) => (
               <div
                 key={idx}
                 className="bg-white p-3 rounded border border-blue-200"
@@ -369,7 +453,33 @@ function AudioRecorder({
                 <span className="text-xs text-blue-500 font-semibold">
                   Chunk {idx + 1}:
                 </span>
-                <p className="mt-1 text-gray-800">{text}</p>
+                <p className="mt-1 text-gray-800">{transcript.text}</p>
+
+                {/* Display speaker information if available */}
+                {transcript.speakers && transcript.speakers.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-blue-100">
+                    <p className="text-xs text-blue-600 font-semibold mb-2">
+                      👥 Speakers Detected:
+                    </p>
+                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                      {transcript.speakers.map((speaker, sIdx) => (
+                        <div
+                          key={sIdx}
+                          className="text-xs bg-blue-50 p-2 rounded"
+                        >
+                          <span className="font-semibold text-blue-700">
+                            ผู้พูด {speaker.speakerTag + 1}
+                          </span>
+                          <span className="text-gray-500 ml-2">
+                            ({speaker.startTime.toFixed(1)}s -{" "}
+                            {speaker.endTime.toFixed(1)}s):
+                          </span>
+                          <p className="mt-1 text-gray-700">{speaker.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

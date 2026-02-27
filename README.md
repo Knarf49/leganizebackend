@@ -89,7 +89,42 @@ Create or update `.env` file:
 
 ```env
 DATABASE_URL="postgresql://username:password@localhost:5432/database_name?schema=public"
+
+# Google Cloud Speech-to-Text API
+# Download your service account JSON key from Google Cloud Console
+# https://console.cloud.google.com/apis/credentials
+GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service-account-key.json"
 ```
+
+### Setting up Google Cloud Speech-to-Text
+
+1. **Create a Google Cloud Project**:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select an existing one
+
+2. **Enable Speech-to-Text API**:
+   - Navigate to "APIs & Services" > "Library"
+   - Search for "Cloud Speech-to-Text API"
+   - Click "Enable"
+
+3. **Create Service Account Credentials**:
+   - Go to "APIs & Services" > "Credentials"
+   - Click "Create Credentials" > "Service Account"
+   - Follow the wizard and download the JSON key file
+   - Save it to your project directory (e.g., `google-credentials.json`)
+   - **Important**: Add this file to `.gitignore` to keep credentials secure
+
+4. **Set Environment Variable**:
+
+   ```bash
+   # Windows PowerShell
+   $env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\google-credentials.json"
+
+   # Linux/Mac
+   export GOOGLE_APPLICATION_CREDENTIALS="/path/to/google-credentials.json"
+   ```
+
+   Or add it to your `.env` file as shown above.
 
 ## 5. Generate Prisma Client
 

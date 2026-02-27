@@ -1,9 +1,9 @@
 import { prisma } from "@/lib/prisma";
+import { redis } from "@/lib/redis";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 
 // Access the global transcription queues (declared in websocket.ts)
-// No need to re-declare, just use it
 const transcriptionQueues =
   (globalThis as any).__transcriptionQueues ??
   new Map<string, { queue: any[]; processing: boolean }>();
@@ -120,26 +120,17 @@ export async function waitForTranscriptionComplete(
         !roomQueue ||
         (roomQueue.queue.length === 0 && !roomQueue.processing)
       ) {
-        // Queue is empty and not processing, collect all transcribed text
-        try {
-          const transcriptChunks = await prisma.transcriptChunk.findMany({
-            where: { roomId },
-            orderBy: { createdAt: "asc" },
-          });
-
-          allTranscribedText = transcriptChunks
-            .map((chunk) => chunk.content)
-            .join(" ");
-          console.log(
-            `✅ All transcription complete for room ${roomId}, total text length: ${allTranscribedText.length}`,
-          );
-          resolve(allTranscribedText);
-          return;
-        } catch (error) {
-          console.error("Error collecting transcribed text:", error);
-          resolve("");
-          return;
-        }
+        // Queue is empty — read all chunks from Redis and join as full transcript
+        const redisKey = `transcript:${roomId}`;
+        const chunks = await redis.lrange(redisKey, 0, -1);
+        allTranscribedText = chunks.join(" ").trim();
+        console.log(
+          `✅ All transcription complete for room ${roomId}, total text length: ${allTranscribedText.length} (${chunks.length} chunks from Redis)`,
+        );
+        // Clean up Redis key after reading
+        await redis.del(redisKey);
+        resolve(allTranscribedText);
+        return;
       }
 
       waitTime += checkInterval;
@@ -147,20 +138,11 @@ export async function waitForTranscriptionComplete(
         console.log(
           `⏰ Timeout waiting for transcription to complete for room ${roomId}`,
         );
-        // Still try to collect whatever text we have
-        try {
-          const transcriptChunks = await prisma.transcriptChunk.findMany({
-            where: { roomId },
-            orderBy: { createdAt: "asc" },
-          });
-
-          allTranscribedText = transcriptChunks
-            .map((chunk) => chunk.content)
-            .join(" ");
-          resolve(allTranscribedText);
-        } catch (error) {
-          resolve("");
-        }
+        const redisKey = `transcript:${roomId}`;
+        const chunks = await redis.lrange(redisKey, 0, -1);
+        allTranscribedText = chunks.join(" ").trim();
+        await redis.del(redisKey);
+        resolve(allTranscribedText);
         return;
       }
 

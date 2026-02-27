@@ -5,7 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { redis } from "@/lib/redis";
 import { runRiskDetector, type CompanyTypeInput } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
-import { transcribeAudio } from "@/lib/transcribe";
+import {
+  transcribeWithDeepgram,
+  formatTranscriptWithSpeakers,
+} from "@/lib/deepgram";
 import {
   callAgentForSummary,
   waitForTranscriptionComplete,
@@ -124,7 +127,21 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
   const wss = new WebSocketServer({ noServer: true });
   globalThis.__wss = wss;
 
-  // console.log("🔧 WebSocketServer created with noServer: true");
+  // Heartbeat: ping every 30s to prevent Render.com from closing idle connections (60s timeout)
+  // The browser WebSocket responds to ping frames automatically at protocol level.
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      const extWs = ws as WebSocket & { isAlive?: boolean };
+      if (extWs.isAlive === false) {
+        console.log("💔 WebSocket did not respond to ping, terminating");
+        return extWs.terminate();
+      }
+      extWs.isAlive = false;
+      extWs.ping();
+    });
+  }, 30_000);
+
+  wss.on("close", () => clearInterval(heartbeatInterval));
 
   // Handle HTTP upgrade requests
   httpServer.on("upgrade", (request, socket, head) => {
@@ -145,6 +162,13 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
   });
 
   wss.on("connection", (ws: WebSocket, req) => {
+    // Mark connection as alive; will be reset to false on each ping.
+    // Pong from browser resets it back to true.
+    (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    ws.on("pong", () => {
+      (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    });
+
     const url = new URL(req.url || "", `http://${req.headers.host}`);
     const roomId = url.searchParams.get("roomId");
     const accessToken = url.searchParams.get("accessToken");
@@ -352,7 +376,6 @@ async function processTranscriptionQueue(roomId: string) {
   }
 
   roomQueue.processing = true;
-  let lastTranscribedText = "";
 
   try {
     while (roomQueue.queue.length > 0) {
@@ -373,24 +396,15 @@ async function processTranscriptionQueue(roomId: string) {
       // Process this transcription item and get the transcribed text
       const transcribedText = await processSingleTranscription(item);
       if (transcribedText) {
-        lastTranscribedText = transcribedText; // Keep the latest/most complete transcription
+        // Append chunk to Redis list — survives restarts and works across instances
+        const redisKey = `transcript:${roomId}`;
+        await redis.rpush(redisKey, transcribedText);
+        // Expire after 2 hours in case room never cleanly ends
+        await redis.expire(redisKey, 7200);
       }
 
       // Small delay to prevent API rate limiting
       await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    // Save only the last (most complete) transcribed text to database
-    if (lastTranscribedText.trim()) {
-      console.log(
-        `💾 Saving final transcribed text to DB for room ${roomId}: ${lastTranscribedText.substring(0, 100)}...`,
-      );
-      await prisma.transcriptChunk.create({
-        data: {
-          roomId,
-          content: lastTranscribedText,
-        },
-      });
     }
   } catch (error) {
     console.error(`❌ Queue processing error for room ${roomId}:`, error);
@@ -464,48 +478,33 @@ async function processSingleTranscription(
     writeFileSync(tempPath, audioBuffer);
 
     let text = "";
+    let speakerInfo = null;
     try {
-      // Call TypeScript transcribe function
-      const openaiApiKey = process.env.OPENAI_API_KEY;
+      // Use Deepgram Nova-3 for transcription with speaker diarization
+      const result = await transcribeWithDeepgram(tempPath);
 
-      if (!openaiApiKey) {
-        throw new Error("OPENAI_API_KEY not set in environment");
-      }
-
-      const result = await transcribeAudio(tempPath, openaiApiKey);
-
-      if (result.success && result.text) {
-        text = result.text;
-        console.log(`✅ Transcribed (${item.timestamp}): ${text}`);
-      } else {
+      if (!result.success) {
         throw new Error(result.error || "Transcription failed");
       }
 
-      /* OLD: Python script approach
-      // Use system python for compatibility (Linux/Docker uses /usr/bin/python3, Windows uses venv)
-      const pythonPath =
-        process.platform === "win32"
-          ? join(process.cwd(), ".venv", "Scripts", "python.exe")
-          : "python3";
-      const scriptPath = join(process.cwd(), "lib", "transcribe.py");
-
-      const output = execSync(
-        `"${pythonPath}" "${scriptPath}" "${tempPath}" "${openaiApiKey}"`,
-        {
-          encoding: "utf-8",
-          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        },
-      );
-
-      const result = JSON.parse(output);
-
-      if (result.success) {
-        text = result.text;
-        console.log(`✅ Transcribed (${item.timestamp}): ${text}`);
-      } else {
-        throw new Error(result.error);
+      if (!result.text) {
+        // No speech detected in this chunk — skip silently
+        console.log(`⚠️ No speech detected in audio chunk, skipping.`);
+        return "";
       }
-      */
+
+      text = result.text;
+      speakerInfo = result.speakers;
+      console.log(`✅ Transcribed (${item.timestamp}): ${text}`);
+
+      if (speakerInfo && speakerInfo.length > 0) {
+        const speakerCount = new Set(speakerInfo.map((s) => s.speakerTag)).size;
+        console.log(`👥 Detected ${speakerCount} speakers`);
+
+        // Format transcript with speaker labels for logging
+        const formattedTranscript = formatTranscriptWithSpeakers(speakerInfo);
+        console.log(`📝 Speaker transcript:\n${formattedTranscript}`);
+      }
     } finally {
       // Clean up temp file
       try {
@@ -518,6 +517,7 @@ async function processSingleTranscription(
     broadcastToRoom(roomId, {
       type: "transcribed",
       text,
+      speakers: speakerInfo,
       timestamp: item.timestamp,
     });
 
