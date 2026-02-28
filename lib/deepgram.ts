@@ -36,12 +36,12 @@ export async function transcribeWithDeepgram(audioPath: string): Promise<{
     // Nova-3 does NOT support Thai — must use nova-2 (general tier) for th
     // https://developers.deepgram.com/docs/models-languages-overview
     const url = new URL("https://api.deepgram.com/v1/listen");
-    url.searchParams.set("model", "whisper");
+    url.searchParams.set("model", "nova-2");
     url.searchParams.set("language", "th");
-    // url.searchParams.set("punctuate", "true");
+    url.searchParams.set("punctuate", "true");
     url.searchParams.set("diarize", "true"); // Enable speaker diarization
-    // url.searchParams.set("smart_format", "true");
-    // url.searchParams.set("utterances", "true"); // Get utterances for better speaker segments
+    url.searchParams.set("smart_format", "true");
+    url.searchParams.set("utterances", "true"); // Get utterances for better speaker segments
 
     console.error("🔄 Sending request to Deepgram API (Nova-3)...");
 

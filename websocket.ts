@@ -115,8 +115,6 @@ const pendingESP32 =
   globalThis.__pendingESP32 ?? new Map<string, PendingESP32>();
 globalThis.__pendingESP32 = pendingESP32;
 
-const wss: WebSocketServer = globalThis.__wss as WebSocketServer;
-
 const BUFFER_SIZE = 3;
 const COOLDOWN_MS = 60_000;
 
@@ -147,9 +145,9 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
   httpServer.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url || "", `http://${request.headers.host}`);
 
-    // Only handle our WebSocket path, let Next.js handle HMR and others
-    if (url.pathname === "/ws") {
-      // console.log("🔗 Handling WebSocket upgrade for /ws");
+    // Handle both /ws (full mode) and /ws/simple (simple transcription mode)
+    if (url.pathname === "/ws" || url.pathname === "/ws/simple") {
+      // console.log(`🔗 Handling WebSocket upgrade for ${url.pathname}`);
 
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit("connection", ws, request);
@@ -170,6 +168,14 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     });
 
     const url = new URL(req.url || "", `http://${req.headers.host}`);
+    
+    // ✨ Simple mode - no room required, just transcribe audio
+    if (url.pathname === "/ws/simple") {
+      handleSimpleWebSocket(ws);
+      return;
+    }
+
+    // Full mode - requires roomId and accessToken
     const roomId = url.searchParams.get("roomId");
     const accessToken = url.searchParams.get("accessToken");
     const deviceId = url.searchParams.get("deviceId"); // ESP32 ส่งมา
@@ -268,7 +274,7 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
         } else if (message.type === "esp32-audio-chunk") {
           handleESP32AudioChunk(message as ESP32AudioChunkMessage);
         }
-      } catch (error) {
+      } catch {
         // console.error("Failed to process WebSocket message:", error);
         ws.send(
           JSON.stringify({
@@ -354,7 +360,7 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
       }
     });
 
-    ws.on("error", (error) => {
+    ws.on("error", () => {
       // console.error(`WebSocket error for room ${roomId}:`, error);
     });
   });
@@ -868,7 +874,7 @@ async function handleTranscribedAnalysisMessage(
 /**
  * Broadcast message to all clients in a room
  */
-export function broadcastToRoom(roomId: string, data: any) {
+export function broadcastToRoom(roomId: string, data: Record<string, unknown>) {
   const set = wsClients.get(roomId);
   if (!set) {
     // console.log(`⚠️ No WebSocket clients in room: ${roomId}`);
@@ -876,26 +882,27 @@ export function broadcastToRoom(roomId: string, data: any) {
   }
 
   const payload = JSON.stringify(data);
-  let successCount = 0;
 
   for (const client of set) {
     try {
       if (client.ws.readyState === WebSocket.OPEN) {
         client.ws.send(payload);
-        successCount++;
       }
-    } catch (error) {
+    } catch {
       // console.error(`Failed to broadcast to room ${roomId}:`, error);
     }
   }
 
-  // console.log(`✅ Broadcast to ${successCount} clients in room: ${roomId}`);
+  // console.log(`✅ Broadcast to clients in room: ${roomId}`);
 }
 
 /**
  * Emit legal event (for backward compatibility with SSE)
  */
-export function emitLegalEventWebSocket(roomId: string, data: any) {
+export function emitLegalEventWebSocket(
+  roomId: string,
+  data: Record<string, unknown>,
+) {
   // console.log(`📡 Emitting legal event for room: ${roomId}`);
   broadcastToRoom(roomId, {
     type: "legal-risk",
@@ -1019,4 +1026,116 @@ function handleESP32AudioChunk(message: ESP32AudioChunkMessage) {
   }
 
   console.log(`✅ Relayed audio chunk to ${successCount} browser clients`);
+}
+
+/**
+ * Handle simple WebSocket connection for transcription only (no room required)
+ */
+function handleSimpleWebSocket(ws: WebSocket) {
+  console.log("🎤 Simple WebSocket connected");
+
+  ws.send(
+    JSON.stringify({
+      type: "connected",
+      message: "Connected to simple transcription service",
+      timestamp: new Date().toISOString(),
+    }),
+  );
+
+  ws.on("message", async (data: Buffer) => {
+    try {
+      const message = JSON.parse(data.toString());
+
+      if (message.type === "audio-chunk") {
+        await handleSimpleAudioChunk(ws, message);
+      }
+    } catch (error) {
+      console.error("❌ Error processing simple WebSocket message:", error);
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: "Failed to process message",
+        }),
+      );
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("❌ Simple WebSocket disconnected");
+  });
+}
+
+/**
+ * Handle audio chunk in simple mode - just transcribe and return text
+ */
+async function handleSimpleAudioChunk(
+  ws: WebSocket,
+  message: { audio: string; mimeType?: string },
+) {
+  const { audio } = message;
+
+  try {
+    ws.send(
+      JSON.stringify({
+        type: "transcribing",
+        message: "🎤 Transcribing audio...",
+      }),
+    );
+
+    console.log(
+      `🎤 Simple mode: Transcribing audio chunk (${audio.length} chars base64)`,
+    );
+
+    // Decode base64 and save to temp file
+    const audioBuffer = Buffer.from(audio, "base64");
+    const tempDir = tmpdir();
+    const tempPath = join(tempDir, `simple_audio_${Date.now()}.wav`);
+
+    writeFileSync(tempPath, audioBuffer);
+    console.log(`✅ Saved temp file: ${tempPath}`);
+
+    try {
+      // Transcribe with Deepgram
+      const transcriptResult = await transcribeWithDeepgram(tempPath);
+
+      if (transcriptResult.success && transcriptResult.text) {
+        const formattedText = transcriptResult.speakers
+          ? formatTranscriptWithSpeakers(transcriptResult.speakers)
+          : transcriptResult.text;
+
+        console.log(
+          `✅ Simple mode: Transcription successful: ${formattedText.substring(0, 100)}...`,
+        );
+
+        ws.send(
+          JSON.stringify({
+            type: "transcribed",
+            text: formattedText,
+            speakers: transcriptResult.speakers || [],
+          }),
+        );
+      } else {
+        throw new Error(
+          transcriptResult.error || "No transcription text returned",
+        );
+      }
+    } finally {
+      // Clean up temp file
+      try {
+        unlinkSync(tempPath);
+        console.log(`🗑️ Cleaned up temp file`);
+      } catch (e) {
+        console.error(`Failed to delete temp file:`, e);
+      }
+    }
+  } catch (error) {
+    console.error("❌ Error transcribing audio in simple mode:", error);
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        message: "Failed to transcribe audio",
+        error: error instanceof Error ? error.message : "Unknown error",
+      }),
+    );
+  }
 }
