@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-//TODO: เพิ่ม persistance memory ให้ langgraph
-//TODO: ทำให้ function นี้สามารถสร้าง thread ขึ้นมาได้
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -15,7 +13,12 @@ export async function GET(
       select: {
         id: true,
         status: true,
+        meetingType: true,
+        calledBy: true,
+        location: true,
+        agendas: true,
         threadId: true,
+        accessToken: true,
         startedAt: true,
         endedAt: true,
         finalSummary: true,
