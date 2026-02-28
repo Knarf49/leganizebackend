@@ -13,17 +13,39 @@ datasource db {
   provider = "postgresql"
 }
 
+enum MeetingType {
+  AGM
+  EGM
+  BOD
+}
+
 model Room {
-  id           String      @id @default(uuid())
-  status       RoomStatus  @default(ACTIVE)
-  threadId     String      @unique
-  accessToken  String      @unique
-  startedAt    DateTime    @default(now())
-  endedAt      DateTime? //null = ยังไม่จบ
+  id     String     @id @default(uuid())
+  status RoomStatus @default(ACTIVE)
+
+  // Meeting info
+  meetingType MeetingType @default(BOD)
+  calledBy    String      @default("System")
+  location    String      @default("Not specified")
+  agendas     String[]    @default([])
+
+  // System / chat
+  threadId    String @unique
+  accessToken String @unique
+
+  // Time
+  startedAt DateTime  @default(now())
+  endedAt   DateTime? // null = ยังไม่จบ
+
+  // Summary
   finalSummary String?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-  companyType  CompanyType @default(LIMITED)
+
+  // Company
+  companyType CompanyType @default(LIMITED)
+
+  // Audit
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 enum RoomStatus {
