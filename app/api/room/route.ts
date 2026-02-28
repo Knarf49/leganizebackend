@@ -19,13 +19,47 @@ export async function POST(req: Request) {
 
     // 1️⃣ Parse body
     const body = await req.json();
-    const { companyType } = body as { companyType?: string };
+    const { companyType, meetingType, calledBy, location, agendas, startedAt } =
+      body as {
+        companyType?: string;
+        meetingType?: string;
+        calledBy?: string;
+        location?: string;
+        agendas?: string[];
+        startedAt?: string;
+      };
 
     if (!companyType) {
       return NextResponse.json(
         { error: "companyType is required" },
         { status: 400 },
       );
+    }
+
+    // Validate meetingType if provided
+    let meetingTypeValue = "BOD";
+    if (meetingType) {
+      const validMeetingTypes = ["AGM", "EGM", "BOD"];
+      if (!validMeetingTypes.includes(meetingType)) {
+        return NextResponse.json(
+          { error: "Invalid meetingType", allowed: validMeetingTypes },
+          { status: 400 },
+        );
+      }
+      meetingTypeValue = meetingType;
+    }
+
+    // Validate startedAt if provided
+    let startedAtValue = new Date();
+    if (startedAt) {
+      const parsed = new Date(startedAt);
+      if (isNaN(parsed.getTime())) {
+        return NextResponse.json(
+          { error: "Invalid startedAt timestamp" },
+          { status: 400 },
+        );
+      }
+      startedAtValue = parsed;
     }
 
     // Map Thai labels to enum values
@@ -61,6 +95,11 @@ export async function POST(req: Request) {
         accessToken,
         status: "ACTIVE",
         companyType: enumValue,
+        meetingType: meetingTypeValue as "AGM" | "EGM" | "BOD",
+        calledBy: calledBy || "System",
+        location: location || "Not specified",
+        agendas: Array.isArray(agendas) ? agendas : [],
+        startedAt: startedAtValue,
       },
     });
 
@@ -193,6 +232,10 @@ export async function POST(req: Request) {
               context: {
                 companyType: COMPANY_TYPE_LABELS[enumValue],
                 outputFormat: ANALYSIS_OUTPUT_FORMAT,
+                meetingType: meetingType,
+                calledBy: calledBy,
+                agendas: agendas,
+                startedAt: startedAt,
               },
             },
           },
@@ -234,6 +277,63 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error: "Failed to create room",
+        details:
+          process.env.NODE_ENV === "development"
+            ? error instanceof Error
+              ? error.message
+              : String(error)
+            : undefined,
+      },
+      { status: 500 },
+    );
+  }
+}
+
+export async function GET(req: Request) {
+  try {
+    // Get query parameters
+    const { searchParams } = new URL(req.url);
+    const status = searchParams.get("status");
+    const companyType = searchParams.get("companyType");
+    const limit = parseInt(searchParams.get("limit") || "50", 10);
+    const skip = parseInt(searchParams.get("skip") || "0", 10);
+
+    // Build where clause
+    const where: Record<string, any> = {};
+    if (status) {
+      where.status = status;
+    }
+    if (companyType) {
+      where.companyType = companyType;
+    }
+
+    // Get total count
+    const total = await prisma.room.count({ where });
+
+    // Get rooms with pagination
+    const rooms = await prisma.room.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      skip,
+    });
+
+    return NextResponse.json(
+      {
+        total,
+        count: rooms.length,
+        skip,
+        limit,
+        rooms,
+      },
+      { status: 200 },
+    );
+  } catch (error) {
+    console.error("❌ Get rooms error:", error);
+
+    return NextResponse.json(
+      {
+        error: "Failed to fetch rooms",
         details:
           process.env.NODE_ENV === "development"
             ? error instanceof Error
