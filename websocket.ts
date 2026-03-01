@@ -1042,17 +1042,21 @@ function handleSimpleWebSocket(ws: WebSocket) {
   const startSttStream = () => {
     sttStream = createGoogleSTTStream();
 
-    sttStream.events.on("transcript", ({ text, isFinal }: { text: string; isFinal: boolean }) => {
-      if (ws.readyState !== WebSocket.OPEN) return;
-      ws.send(
-        JSON.stringify({
-          type: isFinal ? "transcribed" : "partial-transcript",
-          text,
-          speakers: [],
-        }),
-      );
-      if (isFinal) console.log(`✅ Final transcript: ${text.substring(0, 80)}`);
-    });
+    sttStream.events.on(
+      "transcript",
+      ({ text, isFinal }: { text: string; isFinal: boolean }) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(
+          JSON.stringify({
+            type: isFinal ? "transcribed" : "partial-transcript",
+            text,
+            speakers: [],
+          }),
+        );
+        if (isFinal)
+          console.log(`✅ Final transcript: ${text.substring(0, 80)}`);
+      },
+    );
 
     sttStream.events.on("error", (err: Error) => {
       console.error("❌ STT stream error:", err.message);
@@ -1109,7 +1113,6 @@ function handleSimpleWebSocket(ws: WebSocket) {
         startSttStream();
 
         ws.send(JSON.stringify({ type: "stream-started" }));
-
       } else if (message.type === "audio-data") {
         if (!sttStream) {
           console.warn("⚠️ Received audio-data but no active STT stream");
@@ -1117,7 +1120,6 @@ function handleSimpleWebSocket(ws: WebSocket) {
         }
         const pcmBuffer = Buffer.from(message.audio, "base64");
         sttStream.write(pcmBuffer);
-
       } else if (message.type === "stop-stream") {
         console.log("⏹️ Client requested stop-stream");
         endStream();

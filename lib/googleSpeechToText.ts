@@ -233,15 +233,23 @@ export function createGoogleSTTStream(): {
       },
       interimResults: true,
     })
-    .on("data", (data: { results?: Array<{ alternatives?: Array<{ transcript?: string }>; isFinal?: boolean }> }) => {
-      const result = data.results?.[0];
-      const transcript = result?.alternatives?.[0]?.transcript;
-      if (!transcript) return;
-      events.emit("transcript", {
-        text: transcript,
-        isFinal: result?.isFinal ?? false,
-      });
-    })
+    .on(
+      "data",
+      (data: {
+        results?: Array<{
+          alternatives?: Array<{ transcript?: string }>;
+          isFinal?: boolean;
+        }>;
+      }) => {
+        const result = data.results?.[0];
+        const transcript = result?.alternatives?.[0]?.transcript;
+        if (!transcript) return;
+        events.emit("transcript", {
+          text: transcript,
+          isFinal: result?.isFinal ?? false,
+        });
+      },
+    )
     .on("error", (err: Error) => {
       console.error("❌ STT stream error:", err.message);
       events.emit("error", err);
