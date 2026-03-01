@@ -6,9 +6,10 @@ import { redis } from "@/lib/redis";
 import { runRiskDetector, type CompanyTypeInput } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
 import {
-  transcribeWithDeepgram,
+  transcribeWithGoogleSTT,
   formatTranscriptWithSpeakers,
-} from "@/lib/deepgram";
+  createGoogleSTTStream,
+} from "@/lib/googleSpeechToText";
 import {
   callAgentForSummary,
   waitForTranscriptionComplete,
@@ -168,7 +169,7 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     });
 
     const url = new URL(req.url || "", `http://${req.headers.host}`);
-    
+
     // ✨ Simple mode - no room required, just transcribe audio
     if (url.pathname === "/ws/simple") {
       handleSimpleWebSocket(ws);
@@ -486,8 +487,8 @@ async function processSingleTranscription(
     let text = "";
     let speakerInfo = null;
     try {
-      // Use Deepgram Nova-3 for transcription with speaker diarization
-      const result = await transcribeWithDeepgram(tempPath);
+      // Use Google Cloud Speech-to-Text V2 Chirp 3 for transcription with speaker diarization
+      const result = await transcribeWithGoogleSTT(tempPath);
 
       if (!result.success) {
         throw new Error(result.error || "Transcription failed");
@@ -1034,6 +1035,59 @@ function handleESP32AudioChunk(message: ESP32AudioChunkMessage) {
 function handleSimpleWebSocket(ws: WebSocket) {
   console.log("🎤 Simple WebSocket connected");
 
+  // Active streaming STT session for this connection
+  let sttStream: ReturnType<typeof createGoogleSTTStream> | null = null;
+  let isClientRecording = false;
+
+  const startSttStream = () => {
+    sttStream = createGoogleSTTStream();
+
+    sttStream.events.on("transcript", ({ text, isFinal }: { text: string; isFinal: boolean }) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(
+        JSON.stringify({
+          type: isFinal ? "transcribed" : "partial-transcript",
+          text,
+          speakers: [],
+        }),
+      );
+      if (isFinal) console.log(`✅ Final transcript: ${text.substring(0, 80)}`);
+    });
+
+    sttStream.events.on("error", (err: Error) => {
+      console.error("❌ STT stream error:", err.message);
+      sttStream = null;
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "error", message: err.message }));
+      }
+      // Auto-restart stream if client is still recording
+      if (isClientRecording) {
+        console.log("🔄 Auto-restarting STT stream...");
+        setTimeout(() => {
+          if (isClientRecording) startSttStream();
+        }, 500);
+      }
+    });
+
+    sttStream.events.on("end", () => {
+      console.log("🔚 STT stream ended");
+      sttStream = null;
+      // Auto-restart if client is still recording (5-min limit hit)
+      if (isClientRecording) {
+        console.log("🔄 Restarting STT stream (session limit)...");
+        startSttStream();
+      }
+    });
+  };
+
+  const endStream = () => {
+    isClientRecording = false;
+    if (sttStream) {
+      sttStream.end();
+      sttStream = null;
+    }
+  };
+
   ws.send(
     JSON.stringify({
       type: "connected",
@@ -1042,12 +1096,31 @@ function handleSimpleWebSocket(ws: WebSocket) {
     }),
   );
 
-  ws.on("message", async (data: Buffer) => {
+  ws.on("message", (data: Buffer) => {
     try {
       const message = JSON.parse(data.toString());
 
-      if (message.type === "audio-chunk") {
-        await handleSimpleAudioChunk(ws, message);
+      if (message.type === "start-stream") {
+        // Close existing session if any
+        endStream();
+
+        console.log("🎤 Starting STT streaming session...");
+        isClientRecording = true;
+        startSttStream();
+
+        ws.send(JSON.stringify({ type: "stream-started" }));
+
+      } else if (message.type === "audio-data") {
+        if (!sttStream) {
+          console.warn("⚠️ Received audio-data but no active STT stream");
+          return;
+        }
+        const pcmBuffer = Buffer.from(message.audio, "base64");
+        sttStream.write(pcmBuffer);
+
+      } else if (message.type === "stop-stream") {
+        console.log("⏹️ Client requested stop-stream");
+        endStream();
       }
     } catch (error) {
       console.error("❌ Error processing simple WebSocket message:", error);
@@ -1061,81 +1134,7 @@ function handleSimpleWebSocket(ws: WebSocket) {
   });
 
   ws.on("close", () => {
+    endStream();
     console.log("❌ Simple WebSocket disconnected");
   });
-}
-
-/**
- * Handle audio chunk in simple mode - just transcribe and return text
- */
-async function handleSimpleAudioChunk(
-  ws: WebSocket,
-  message: { audio: string; mimeType?: string },
-) {
-  const { audio } = message;
-
-  try {
-    ws.send(
-      JSON.stringify({
-        type: "transcribing",
-        message: "🎤 Transcribing audio...",
-      }),
-    );
-
-    console.log(
-      `🎤 Simple mode: Transcribing audio chunk (${audio.length} chars base64)`,
-    );
-
-    // Decode base64 and save to temp file
-    const audioBuffer = Buffer.from(audio, "base64");
-    const tempDir = tmpdir();
-    const tempPath = join(tempDir, `simple_audio_${Date.now()}.wav`);
-
-    writeFileSync(tempPath, audioBuffer);
-    console.log(`✅ Saved temp file: ${tempPath}`);
-
-    try {
-      // Transcribe with Deepgram
-      const transcriptResult = await transcribeWithDeepgram(tempPath);
-
-      if (transcriptResult.success && transcriptResult.text) {
-        const formattedText = transcriptResult.speakers
-          ? formatTranscriptWithSpeakers(transcriptResult.speakers)
-          : transcriptResult.text;
-
-        console.log(
-          `✅ Simple mode: Transcription successful: ${formattedText.substring(0, 100)}...`,
-        );
-
-        ws.send(
-          JSON.stringify({
-            type: "transcribed",
-            text: formattedText,
-            speakers: transcriptResult.speakers || [],
-          }),
-        );
-      } else {
-        throw new Error(
-          transcriptResult.error || "No transcription text returned",
-        );
-      }
-    } finally {
-      // Clean up temp file
-      try {
-        unlinkSync(tempPath);
-        console.log(`🗑️ Cleaned up temp file`);
-      } catch (e) {
-        console.error(`Failed to delete temp file:`, e);
-      }
-    }
-  } catch (error) {
-    console.error("❌ Error transcribing audio in simple mode:", error);
-    ws.send(
-      JSON.stringify({
-        type: "error",
-        message: "Failed to transcribe audio",
-        error: error instanceof Error ? error.message : "Unknown error",
-      }),
-    );
-  }
 }

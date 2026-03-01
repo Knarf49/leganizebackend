@@ -4,22 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { fixThaiSpacing } from "@/lib/textProcessing";
 
-// Dynamic import for RecordRTC to avoid SSR issues
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let RecordRTC: any = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let StereoAudioRecorder: any = null;
-
-
 function AudioRecorder() {
   const wsRef = useRef<WebSocket | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recorderRef = useRef<any | null>(null);
+  const processorRef = useRef<any | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const isStoppingRef = useRef(false);
   const [isRecording, setIsRecording] = useState(false);
   const [status, setStatus] = useState("Ready");
-  const [chunkCount, setChunkCount] = useState(0); // Track chunks sent
   const [transcripts, setTranscripts] = useState<
     Array<{
       text: string;
@@ -64,11 +57,13 @@ function AudioRecorder() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        
+
         if (data.type === "connected") {
           setStatus("✅ Connected");
-        } else if (data.type === "transcribing") {
-          setStatus("🎤 Transcribing audio...");
+        } else if (data.type === "stream-started") {
+          setStatus("🎤 Recording & streaming...");
+        } else if (data.type === "partial-transcript") {
+          setStatus(`🎤 ${data.text}`);
         } else if (data.type === "transcribed") {
           setStatus("✅ Transcription complete");
           setTranscripts((prev) => [
@@ -124,98 +119,66 @@ function AudioRecorder() {
     };
   }, [connectWebSocket]);
 
-  const sendAudioToWebSocket = async (blob: Blob) => {
-    try {
-      console.log(`🎤 Sending audio via WebSocket: ${blob.size} bytes`);
+  const sendAudioToWebSocket = (pcmBuffer: ArrayBuffer) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        console.warn("⚠️ WebSocket is not connected, skipping chunk");
-        return;
-      }
-
-      // Convert blob to base64
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result as string;
-          const base64Data = result.split(",")[1];
-          resolve(base64Data);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-
-      // Send via WebSocket
-      ws.send(
-        JSON.stringify({
-          type: "audio-chunk",
-          audio: base64,
-          mimeType: blob.type,
-        }),
-      );
-
-      // Update chunk count
-      setChunkCount((prev) => {
-        const newCount = prev + 1;
-        setStatus(`🎤 Recording... (${newCount} chunks sent)`);
-        return newCount;
-      });
-
-      console.log(`✅ Audio chunk sent via WebSocket`);
-    } catch (error) {
-      console.error("❌ Error sending audio:", error);
+    // Convert ArrayBuffer to base64
+    const bytes = new Uint8Array(pcmBuffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
     }
+    const base64 = btoa(binary);
+    ws.send(JSON.stringify({ type: "audio-data", audio: base64 }));
   };
 
   const startRecording = async () => {
     try {
       console.log("🎙️ Start recording clicked");
 
-      // Dynamic import RecordRTC to avoid SSR issues
-      if (!RecordRTC) {
-        const recordRTCModule = await import("recordrtc");
-        RecordRTC = recordRTCModule.default;
-        StereoAudioRecorder = recordRTCModule.StereoAudioRecorder;
-        console.log("✅ RecordRTC loaded");
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setStatus("❌ WebSocket not connected");
+        return;
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       console.log("✅ Got audio stream");
 
-      // Configure RecordRTC for WAV format with real-time chunks
-      const recorder = new RecordRTC(stream, {
-        type: "audio",
-        mimeType: "audio/wav",
-        recorderType: StereoAudioRecorder,
-        numberOfAudioChannels: 1,
-        desiredSampRate: 16000,
-        timeSlice: 3000, // Send chunks every 3 seconds
-        ondataavailable: async (blob: Blob) => {
-          if (blob.size === 0) return;
-          console.log(`📦 Audio chunk ready, size: ${blob.size} bytes`);
+      // Tell server to start a new STT streaming session
+      ws.send(JSON.stringify({ type: "start-stream" }));
 
-          // Validate minimum size (at least 10KB for meaningful transcription)
-          if (blob.size < 10 * 1024) {
-            console.log(
-              `⚠️ Audio chunk too small (${blob.size} bytes), skipping...`,
-            );
-            return;
-          }
+      // AudioContext at 16 kHz mono — required for LINEAR16 PCM
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      audioContextRef.current = audioContext;
 
-          // Send chunk immediately via WebSocket
-          await sendAudioToWebSocket(blob);
-        },
-      });
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
 
-      console.log("🎤 Starting RecordRTC with real-time chunking");
-      recorder.startRecording();
-      recorderRef.current = recorder;
+      processor.onaudioprocess = (e: AudioProcessingEvent) => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN)
+          return;
+        const float32 = e.inputBuffer.getChannelData(0);
+        // Convert Float32 [-1,1] → Int16 PCM
+        const int16 = new Int16Array(float32.length);
+        for (let i = 0; i < float32.length; i++) {
+          int16[i] = Math.max(
+            -32768,
+            Math.min(32767, Math.round(float32[i] * 32767)),
+          );
+        }
+        sendAudioToWebSocket(int16.buffer);
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+
       setIsRecording(true);
-      setChunkCount(0); // Reset chunk count
-      setStatus("🎤 Recording... (0 chunks sent)");
       setTranscripts([]);
+      setStatus("🎤 Waiting for stream to start...");
     } catch (error) {
       console.error("❌ Error accessing microphone:", error);
       setStatus("❌ Microphone error");
@@ -223,30 +186,35 @@ function AudioRecorder() {
   };
 
   const stopRecording = async () => {
-    if (recorderRef.current && !isStoppingRef.current) {
-      console.log("⏹️ Stopping recording...");
-      isStoppingRef.current = true;
+    if (!isRecording || isStoppingRef.current) return;
+    isStoppingRef.current = true;
+    console.log("⏹️ Stopping recording...");
 
-      const recorder = recorderRef.current;
-      const stream = streamRef.current;
-      const totalChunks = chunkCount;
-      recorderRef.current = null;
-      streamRef.current = null;
-      setIsRecording(false);
-      setStatus(`✅ Recording stopped (${totalChunks} chunks sent)`);
-
-      recorder.stopRecording(() => {
-        console.log("✅ RecordRTC stopped");
-
-        // Stop all microphone tracks
-        if (stream) {
-          stream.getTracks().forEach((track) => track.stop());
-        }
-
-        isStoppingRef.current = false;
-        console.log("✅ Recording stopped and cleaned up");
-      });
+    // Disconnect audio nodes
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
     }
+    if (audioContextRef.current) {
+      await audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    // Stop microphone tracks
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+
+    // Tell server to end the STT stream
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "stop-stream" }));
+    }
+
+    setIsRecording(false);
+    setStatus("⏹️ Stopped — waiting for final transcript...");
+    isStoppingRef.current = false;
   };
 
   return (
@@ -324,7 +292,6 @@ function AudioRecorder() {
   );
 }
 
-
 export default function RecordPage() {
   return (
     <div className="min-h-screen px-6 py-10">
@@ -339,7 +306,8 @@ export default function RecordPage() {
                 Audio Recording & Transcription
               </h2>
               <p className="mt-2 text-sm text-slate-600">
-                อัดเสียงและดู transcription แบบง่าย ๆ ผ่าน WebSocket (ไม่ต้องสร้าง room)
+                อัดเสียงและดู transcription แบบง่าย ๆ ผ่าน WebSocket
+                (ไม่ต้องสร้าง room)
               </p>
             </div>
             <div className="rounded-2xl bg-slate-900 px-4 py-3 text-xs uppercase tracking-[0.18em] text-slate-100">

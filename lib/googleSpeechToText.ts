@@ -1,19 +1,14 @@
 import { v2 } from "@google-cloud/speech";
+import SpeechV1 from "@google-cloud/speech";
 import { Storage } from "@google-cloud/storage";
 import { readFileSync } from "fs";
 import { basename } from "path";
-import * as protos from "@google-cloud/speech/build/protos/protos";
-
-// V2 API types
-type ISpeechRecognitionResult =
-  protos.google.cloud.speech.v2.ISpeechRecognitionResult;
-type ISpeechRecognitionAlternative =
-  protos.google.cloud.speech.v2.ISpeechRecognitionAlternative;
-type IWordInfo = protos.google.cloud.speech.v2.IWordInfo;
+import { EventEmitter } from "events";
 
 /**
  * Transcribe audio to Thai text using Google Cloud Speech-to-Text V2 API
- * with Chirp 3 model and speaker diarization via batchRecognize
+ * with chirp_2 model (supports speaker diarization + word offsets) via batchRecognize.
+ * Audio is uploaded to GCS first, then deleted after completion.
  */
 export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
   success: boolean;
@@ -27,64 +22,43 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
   }>;
   fullTranscript?: string;
 }> {
+  const REGION = process.env.GOOGLE_STT_REGION || "us";
+  let gcsFile: ReturnType<ReturnType<Storage["bucket"]>["file"]> | null = null;
+
   try {
-    const REGION = process.env.GOOGLE_STT_REGION || "us";
     console.error(
       `🔄 Initializing Google Cloud Speech client (V2 API, region: ${REGION})...`,
     );
-    // Chirp 3 does NOT support "global"; use "us" or "eu" multi-region, or
-    // "asia-southeast1" / "asia-northeast1" (Preview) for Asian deployments.
-    const client = new v2.SpeechClient({
-      apiEndpoint: `${REGION}-speech.googleapis.com`,
-    });
+    const apiEndpoint =
+      REGION === "global"
+        ? "speech.googleapis.com"
+        : `${REGION}-speech.googleapis.com`;
+    const client = new v2.SpeechClient({ apiEndpoint });
 
     console.error(`🎤 Transcribing audio: ${audioPath}`);
-
-    // Read audio file
     const audioBuffer = readFileSync(audioPath);
     const fileSizeMB = audioBuffer.length / (1024 * 1024);
-
     console.error(`📁 Audio file size: ${fileSizeMB.toFixed(2)} MB`);
 
-    // batchRecognize ALWAYS requires a GCS URI — inline content is not supported.
+    // Upload to GCS (required by batchRecognize)
     const bucketName = process.env.GCS_BUCKET_NAME;
     if (!bucketName) {
       throw new Error(
-        "GCS_BUCKET_NAME environment variable is required for batchRecognize. " +
-          "Please set up a Google Cloud Storage bucket. See GCS_SETUP.md for instructions.",
+        "GCS_BUCKET_NAME environment variable is required. See GCS_SETUP.md.",
       );
     }
 
     console.error("📤 Uploading audio to Google Cloud Storage...");
     const storage = new Storage();
-    const bucket = storage.bucket(bucketName);
     const fileName = `audio-transcribe/${Date.now()}-${basename(audioPath)}`;
-    const file = bucket.file(fileName);
-
-    await file.save(audioBuffer, {
-      metadata: { contentType: "audio/wav" },
-    });
+    gcsFile = storage.bucket(bucketName).file(fileName);
+    await gcsFile.save(audioBuffer, { metadata: { contentType: "audio/wav" } });
 
     const gcsUri = `gs://${bucketName}/${fileName}`;
     console.error(`✅ Uploaded to GCS: ${gcsUri}`);
 
-    // Schedule deletion after 1 hour
-    setTimeout(
-      async () => {
-        try {
-          await file.delete();
-          console.error(`🗑️ Deleted temporary GCS file: ${gcsUri}`);
-        } catch (err) {
-          console.error(`⚠️ Failed to delete GCS file: ${err}`);
-        }
-      },
-      60 * 60 * 1000,
-    );
-
-    // Get project ID from credentials
+    // Build recognizer path
     const projectId = await client.getProjectId();
-
-    // The recognizer path — "_" means use the default inline recognizer
     const recognizer = `projects/${projectId}/locations/${REGION}/recognizers/_`;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -92,49 +66,45 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
       recognizer,
       config: {
         autoDecodingConfig: {},
-        model: "chirp_3",
+        model: "chirp_2",
         languageCodes: ["th-TH"],
         features: {
           enableAutomaticPunctuation: true,
-          enableWordTimeOffsets: true,
-        },
-        // Speaker diarization must be at config level, not inside features
-        diarizationConfig: {
-          minSpeakerCount: 2,
-          maxSpeakerCount: 6,
         },
       },
       files: [{ uri: gcsUri }],
-      // Return results inline in the response (no extra GCS output file)
-      recognitionOutputConfig: {
-        inlineResponseConfig: {},
-      },
+      recognitionOutputConfig: { inlineResponseConfig: {} },
     };
 
     console.error(
-      "🔄 Sending BatchRecognize request to Google Cloud Speech-to-Text V2 (Chirp 3)...",
+      "🔄 Sending BatchRecognize request to Google Cloud Speech-to-Text V2 (chirp_3)...",
     );
 
-    // batchRecognize returns a long-running operation
     const [operation] = await client.batchRecognize(batchRequest);
     console.error("⏳ Waiting for BatchRecognize LRO to complete...");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [batchResponse] = await (operation as any).promise();
 
-    // batchResponse.results is { [gcsUri]: BatchRecognizeFileResult }
+    // Clean up GCS file immediately after LRO finishes
+    try {
+      await gcsFile.delete();
+      console.error(`🗑️ Deleted GCS file: ${gcsUri}`);
+      gcsFile = null;
+    } catch (err) {
+      console.error(`⚠️ Failed to delete GCS file: ${err}`);
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const resultsMap: Record<string, any> = batchResponse?.results || {};
-    let recognitionResults: ISpeechRecognitionResult[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let recognitionResults: any[] = [];
 
     for (const fileResult of Object.values(resultsMap)) {
-      // Inline results live under inlineResult.results
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const fr = fileResult as any;
       recognitionResults =
-        (fr?.inlineResult?.results as ISpeechRecognitionResult[]) ||
-        (fr?.transcript?.results as ISpeechRecognitionResult[]) ||
-        [];
-      break; // only one file submitted
+        fr?.inlineResult?.results || fr?.transcript?.results || [];
+      break;
     }
 
     if (recognitionResults.length === 0) {
@@ -142,18 +112,15 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
       return { success: false, error: "No transcription results" };
     }
 
-    // Extract full transcript text from all result segments
+    // Full transcript from all segments
     const fullTranscriptParts: string[] = [];
     for (const result of recognitionResults) {
-      if (!result.alternatives || result.alternatives.length === 0) continue;
-      const alternative = result
-        .alternatives[0] as ISpeechRecognitionAlternative;
-      if (alternative.transcript)
-        fullTranscriptParts.push(alternative.transcript);
+      const transcript = result.alternatives?.[0]?.transcript;
+      if (transcript) fullTranscriptParts.push(transcript);
     }
+    const text = fullTranscriptParts.join(" ").trim();
 
-    // Build speaker-labelled segments from word-level data in the LAST result.
-    // Google places ALL words (with speakerLabel) in the final result's word list.
+    // Speaker segments from word-level data in the LAST result
     const speakerSegments: Array<{
       speakerTag: number;
       text: string;
@@ -161,25 +128,24 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
       endTime: number;
     }> = [];
 
-    const lastResult = recognitionResults[
-      recognitionResults.length - 1
-    ] as ISpeechRecognitionResult;
+    const lastResult = recognitionResults[recognitionResults.length - 1];
+    const words = lastResult?.alternatives?.[0]?.words || [];
 
-    if (lastResult?.alternatives?.[0]?.words) {
-      const words = lastResult.alternatives[0].words as IWordInfo[];
+    if (words.length > 0) {
       let currentSpeaker = -1;
       let currentText = "";
       let startTime = 0;
       let endTime = 0;
 
-      for (const wordInfo of words) {
-        // V2 uses speakerLabel (string) — convert to a stable number
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const wordInfo of words as any[]) {
+        // V2 uses speakerLabel (string) — convert to stable number
         const speakerTag =
           (wordInfo.speakerLabel
             ? parseInt(wordInfo.speakerLabel.replace(/\D/g, ""), 10)
             : 0) || 0;
         const word = wordInfo.word || "";
-        // V2 uses startOffset/endOffset instead of startTime/endTime
+        // V2 uses startOffset/endOffset
         const wordStart =
           Number(wordInfo.startOffset?.seconds || 0) +
           (wordInfo.startOffset?.nanos || 0) / 1e9;
@@ -213,8 +179,6 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
       }
     }
 
-    const text = fullTranscriptParts.join(" ").trim();
-
     console.error(`✅ Transcribed: ${text}`);
     console.error(
       `👥 Identified ${new Set(speakerSegments.map((s) => s.speakerTag)).size} speakers`,
@@ -227,14 +191,82 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
       fullTranscript: text,
     };
   } catch (error) {
+    // Best-effort cleanup if LRO failed before we could delete
+    if (gcsFile) {
+      gcsFile.delete().catch(() => {});
+    }
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error(`❌ Google STT transcription error: ${errorMsg}`);
-
-    return {
-      success: false,
-      error: errorMsg,
-    };
+    return { success: false, error: errorMsg };
   }
+}
+
+/**
+ * Create a Google Cloud Speech-to-Text V1 streaming session.
+ * Returns write/end helpers and an EventEmitter for transcript events.
+ *
+ * Events emitted:
+ *   "transcript" { text: string, isFinal: boolean }
+ *   "error"      Error
+ *   "end"        (stream closed)
+ *
+ * Audio must be raw 16-bit signed PCM, mono, 16 000 Hz (LINEAR16).
+ * Max session length: ~5 minutes — restart a new session as needed.
+ */
+export function createGoogleSTTStream(): {
+  write: (pcmBuffer: Buffer) => void;
+  end: () => void;
+  events: EventEmitter;
+} {
+  const client = new SpeechV1.SpeechClient();
+  const events = new EventEmitter();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognizeStream = (client as any)
+    .streamingRecognize({
+      config: {
+        encoding: "LINEAR16",
+        sampleRateHertz: 16000,
+        languageCode: "th-TH",
+        model: "latest_long",
+        enableAutomaticPunctuation: true,
+      },
+      interimResults: true,
+    })
+    .on("data", (data: { results?: Array<{ alternatives?: Array<{ transcript?: string }>; isFinal?: boolean }> }) => {
+      const result = data.results?.[0];
+      const transcript = result?.alternatives?.[0]?.transcript;
+      if (!transcript) return;
+      events.emit("transcript", {
+        text: transcript,
+        isFinal: result?.isFinal ?? false,
+      });
+    })
+    .on("error", (err: Error) => {
+      console.error("❌ STT stream error:", err.message);
+      events.emit("error", err);
+    })
+    .on("end", () => {
+      events.emit("end");
+    });
+
+  return {
+    write: (pcmBuffer: Buffer) => {
+      try {
+        recognizeStream.write(pcmBuffer);
+      } catch (e) {
+        console.error("❌ Failed to write to STT stream:", e);
+      }
+    },
+    end: () => {
+      try {
+        recognizeStream.end();
+      } catch (e) {
+        console.error("❌ Failed to end STT stream:", e);
+      }
+    },
+    events,
+  };
 }
 
 /**
