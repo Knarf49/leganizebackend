@@ -19,7 +19,9 @@ function getGoogleCredentials(): any | undefined {
   try {
     return JSON.parse(raw);
   } catch {
-    console.error("⚠️  GOOGLE_CREDENTIALS_JSON is set but could not be parsed as JSON");
+    console.error(
+      "⚠️  GOOGLE_CREDENTIALS_JSON is set but could not be parsed as JSON",
+    );
     return undefined;
   }
 }
@@ -53,7 +55,10 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
         ? "speech.googleapis.com"
         : `${REGION}-speech.googleapis.com`;
     const credentials = getGoogleCredentials();
-    const client = new v2.SpeechClient({ apiEndpoint, ...(credentials ? { credentials } : {}) });
+    const client = new v2.SpeechClient({
+      apiEndpoint,
+      ...(credentials ? { credentials } : {}),
+    });
 
     console.error(`🎤 Transcribing audio: ${audioPath}`);
     const audioBuffer = readFileSync(audioPath);
@@ -239,7 +244,9 @@ export function createGoogleSTTStream(): {
   events: EventEmitter;
 } {
   const creds = getGoogleCredentials();
-  const client = new SpeechV1.SpeechClient({ ...(creds ? { credentials: creds } : {}) });
+  const client = new SpeechV1.SpeechClient({
+    ...(creds ? { credentials: creds } : {}),
+  });
   const events = new EventEmitter();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
