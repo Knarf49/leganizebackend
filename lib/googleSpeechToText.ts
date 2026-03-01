@@ -6,6 +6,25 @@ import { basename } from "path";
 import { EventEmitter } from "events";
 
 /**
+ * Returns Google service-account credentials parsed from the
+ * GOOGLE_CREDENTIALS_JSON environment variable (used on Render / cloud deploys
+ * where a credentials file cannot be placed on disk).
+ * Falls back to undefined so the SDK picks up GOOGLE_APPLICATION_CREDENTIALS
+ * or ADC as usual.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getGoogleCredentials(): any | undefined {
+  const raw = process.env.GOOGLE_CREDENTIALS_JSON;
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    console.error("⚠️  GOOGLE_CREDENTIALS_JSON is set but could not be parsed as JSON");
+    return undefined;
+  }
+}
+
+/**
  * Transcribe audio to Thai text using Google Cloud Speech-to-Text V2 API
  * with chirp_2 model (supports speaker diarization + word offsets) via batchRecognize.
  * Audio is uploaded to GCS first, then deleted after completion.
@@ -33,7 +52,8 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
       REGION === "global"
         ? "speech.googleapis.com"
         : `${REGION}-speech.googleapis.com`;
-    const client = new v2.SpeechClient({ apiEndpoint });
+    const credentials = getGoogleCredentials();
+    const client = new v2.SpeechClient({ apiEndpoint, ...(credentials ? { credentials } : {}) });
 
     console.error(`🎤 Transcribing audio: ${audioPath}`);
     const audioBuffer = readFileSync(audioPath);
@@ -49,7 +69,7 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
     }
 
     console.error("📤 Uploading audio to Google Cloud Storage...");
-    const storage = new Storage();
+    const storage = new Storage({ ...(credentials ? { credentials } : {}) });
     const fileName = `audio-transcribe/${Date.now()}-${basename(audioPath)}`;
     gcsFile = storage.bucket(bucketName).file(fileName);
     await gcsFile.save(audioBuffer, { metadata: { contentType: "audio/wav" } });
@@ -218,7 +238,8 @@ export function createGoogleSTTStream(): {
   end: () => void;
   events: EventEmitter;
 } {
-  const client = new SpeechV1.SpeechClient();
+  const creds = getGoogleCredentials();
+  const client = new SpeechV1.SpeechClient({ ...(creds ? { credentials: creds } : {}) });
   const events = new EventEmitter();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
