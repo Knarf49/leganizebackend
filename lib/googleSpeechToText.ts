@@ -226,19 +226,86 @@ export async function transcribeWithGoogleSTT(audioPath: string): Promise<{
   }
 }
 
+export type SpeakerSegment = {
+  speakerTag: number;
+  text: string;
+  startTime: number;
+  endTime: number;
+};
+
 /**
- * Create a Google Cloud Speech-to-Text V1 streaming session.
+ * Parse word-level data from a V1 StreamingRecognitionResult into grouped speaker segments.
+ * Words are grouped consecutively by speakerTag.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseSpeakerSegments(words: any[]): SpeakerSegment[] {
+  const segments: SpeakerSegment[] = [];
+  let currentSpeaker = -1;
+  let currentText = "";
+  let startTime = 0;
+  let endTime = 0;
+
+  for (const wordInfo of words) {
+    // V1 uses speakerTag (number); 0 means unassigned — treat as speaker 0
+    const speakerTag: number = wordInfo.speakerTag ?? 0;
+    const word: string = wordInfo.word ?? "";
+    // V1 uses startTime/endTime (Duration object)
+    const wordStart =
+      Number(wordInfo.startTime?.seconds ?? 0) +
+      (wordInfo.startTime?.nanos ?? 0) / 1e9;
+    const wordEnd =
+      Number(wordInfo.endTime?.seconds ?? 0) +
+      (wordInfo.endTime?.nanos ?? 0) / 1e9;
+
+    if (speakerTag !== currentSpeaker && currentSpeaker !== -1) {
+      segments.push({
+        speakerTag: currentSpeaker,
+        text: currentText.trim(),
+        startTime,
+        endTime,
+      });
+      currentText = "";
+    }
+
+    if (currentText === "") startTime = wordStart;
+    currentSpeaker = speakerTag;
+    currentText += (currentText ? " " : "") + word;
+    endTime = wordEnd;
+  }
+
+  if (currentText) {
+    segments.push({
+      speakerTag: currentSpeaker,
+      text: currentText.trim(),
+      startTime,
+      endTime,
+    });
+  }
+
+  return segments;
+}
+
+/**
+ * Create a Google Cloud Speech-to-Text V1 streaming session with speaker diarization.
  * Returns write/end helpers and an EventEmitter for transcript events.
  *
  * Events emitted:
- *   "transcript" { text: string, isFinal: boolean }
+ *   "transcript" { text: string, isFinal: boolean, speakers?: SpeakerSegment[] }
+ *     - interim results: text only, speakers undefined
+ *     - final results:   text + speakers array grouped by speakerTag
  *   "error"      Error
  *   "end"        (stream closed)
  *
  * Audio must be raw 16-bit signed PCM, mono, 16 000 Hz (LINEAR16).
  * Max session length: ~5 minutes — restart a new session as needed.
+ *
+ * @param options.minSpeakers  Minimum expected speakers (default: 2)
+ * @param options.maxSpeakers  Maximum expected speakers (default: 6)
  */
-export function createGoogleSTTStream(): {
+export function createGoogleSTTStream(options?: {
+  minSpeakers?: number;
+  maxSpeakers?: number;
+}): {
   write: (pcmBuffer: Buffer) => void;
   end: () => void;
   events: EventEmitter;
@@ -258,24 +325,46 @@ export function createGoogleSTTStream(): {
         languageCode: "th-TH",
         model: "latest_long",
         enableAutomaticPunctuation: true,
+        enableWordTimeOffsets: true,
+        diarizationConfig: {
+          enableSpeakerDiarization: true,
+          minSpeakerCount: options?.minSpeakers ?? 2,
+          maxSpeakerCount: options?.maxSpeakers ?? 6,
+        },
       },
       interimResults: true,
     })
     .on(
       "data",
-      (data: {
-        results?: Array<{
-          alternatives?: Array<{ transcript?: string }>;
-          isFinal?: boolean;
-        }>;
-      }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (data: any) => {
         const result = data.results?.[0];
         const transcript = result?.alternatives?.[0]?.transcript;
         if (!transcript) return;
-        events.emit("transcript", {
-          text: transcript,
-          isFinal: result?.isFinal ?? false,
-        });
+
+        const isFinal: boolean = result?.isFinal ?? false;
+
+        if (isFinal) {
+          // For final results, diarization is on the word list of the LAST alternative
+          // (Google writes speaker tags only on the final result)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const words: any[] = result?.alternatives?.[0]?.words ?? [];
+          const speakers =
+            words.length > 0 ? parseSpeakerSegments(words) : undefined;
+
+          if (speakers && speakers.length > 0) {
+            const uniqueSpeakers = new Set(speakers.map((s) => s.speakerTag))
+              .size;
+            console.error(
+              `👥 Diarization: ${uniqueSpeakers} speaker(s) in final result`,
+            );
+          }
+
+          events.emit("transcript", { text: transcript, isFinal, speakers });
+        } else {
+          // Interim results have no reliable speaker info yet
+          events.emit("transcript", { text: transcript, isFinal });
+        }
       },
     )
     .on("error", (err: Error) => {
