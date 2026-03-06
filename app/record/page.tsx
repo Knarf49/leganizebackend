@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
 import { fixThaiSpacing } from "@/lib/textProcessing";
 
 function AudioRecorder() {
@@ -224,20 +223,20 @@ function AudioRecorder() {
       </div>
 
       <div className="flex gap-2">
-        <Button
+        <button
           onClick={startRecording}
           disabled={isRecording}
           className="px-4 py-2 bg-blue-500 text-white rounded disabled:opacity-50 hover:bg-blue-600"
         >
           Start Recording
-        </Button>
-        <Button
+        </button>
+        <button
           onClick={stopRecording}
           disabled={!isRecording}
           className="px-4 py-2 bg-red-500 text-white rounded disabled:opacity-50 hover:bg-red-600"
         >
           Stop Recording
-        </Button>
+        </button>
       </div>
 
       {/* Transcript Display */}
