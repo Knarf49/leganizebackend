@@ -17,17 +17,17 @@ export async function POST(req: Request) {
   try {
     console.log(`🏁 Room creation started at ${new Date().toISOString()}`);
 
-    // 1️⃣ Parse body
-    const body = await req.json();
-    const { companyType, meetingType, calledBy, location, agendas, startedAt } =
-      body as {
-        companyType?: string;
-        meetingType?: string;
-        calledBy?: string;
-        location?: string;
-        agendas?: string[];
-        startedAt?: string;
-      };
+    // 1️⃣ Parse FormData (to support file upload)
+    const formData = await req.formData();
+    const companyType = formData.get("companyType") as string | null;
+    const meetingType = formData.get("meetingType") as string | null;
+    const calledBy = formData.get("calledBy") as string | null;
+    const location = formData.get("location") as string | null;
+    const agendasRaw = formData.get("agendas") as string | null;
+    const startedAt = formData.get("startedAt") as string | null;
+    const aoaFile = formData.get("aoaFile") as File | null;
+
+    const agendas = agendasRaw ? JSON.parse(agendasRaw) : [];
 
     if (!companyType) {
       return NextResponse.json(
@@ -36,17 +36,48 @@ export async function POST(req: Request) {
       );
     }
 
-    // Validate meetingType if provided
+    // Extract PDF text if AOA file is provided
+    let aoaContent = "";
+    if (aoaFile && aoaFile.size > 0) {
+      try {
+        console.log(`📄 Processing AOA file: ${aoaFile.name}`);
+        const buffer = Buffer.from(await aoaFile.arrayBuffer());
+        // pdf-parse is CommonJS, use require
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const pdf = require("pdf-parse");
+        const data = await pdf(buffer);
+        aoaContent = data.text;
+        console.log(
+          `✅ Extracted ${data.numpages} pages, ${aoaContent.length} characters`,
+        );
+      } catch (pdfError) {
+        console.error("❌ Failed to parse AOA PDF:", pdfError);
+        // Continue without AOA content
+      }
+    }
+
+    // Validate meetingType if provided (accept enum values or Thai labels)
+    const MEETING_TYPE_MAP: Record<string, string> = {
+      AGM: "AGM",
+      EGM: "EGM",
+      BOD: "BOD",
+      ประชุมสามัญผู้ถือหุ้น: "AGM",
+      ประชุมวิสามัญผู้ถือหุ้น: "EGM",
+      ประชุมคณะกรรมการ: "BOD",
+    };
     let meetingTypeValue = "BOD";
     if (meetingType) {
-      const validMeetingTypes = ["AGM", "EGM", "BOD"];
-      if (!validMeetingTypes.includes(meetingType)) {
+      const mapped = MEETING_TYPE_MAP[meetingType];
+      if (!mapped) {
         return NextResponse.json(
-          { error: "Invalid meetingType", allowed: validMeetingTypes },
+          {
+            error: "Invalid meetingType",
+            allowed: Object.keys(MEETING_TYPE_MAP),
+          },
           { status: 400 },
         );
       }
-      meetingTypeValue = meetingType;
+      meetingTypeValue = mapped;
     }
 
     // Validate startedAt if provided
@@ -88,7 +119,7 @@ export async function POST(req: Request) {
     console.log(`🏗️  Generated room: ${roomId}, thread: ${threadId}`);
 
     // 3️⃣ Create Room
-    const room = await prisma.room.create({
+    await prisma.room.create({
       data: {
         id: roomId,
         threadId,
@@ -236,6 +267,7 @@ export async function POST(req: Request) {
                 calledBy: calledBy,
                 agendas: agendas,
                 startedAt: startedAt,
+                aoaContent: aoaContent, // Extracted PDF text for immediate use
               },
             },
           },
@@ -262,6 +294,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json(
       {
+        id: roomId,
         roomId,
         threadId,
         accessToken,
@@ -299,7 +332,7 @@ export async function GET(req: Request) {
     const skip = parseInt(searchParams.get("skip") || "0", 10);
 
     // Build where clause
-    const where: Record<string, any> = {};
+    const where: Record<string, string> = {};
     if (status) {
       where.status = status;
     }

@@ -10,15 +10,10 @@ import {
   formatTranscriptWithSpeakers,
   createGoogleSTTStream,
 } from "@/lib/googleSpeechToText";
-import {
-  callAgentForSummary,
-  waitForTranscriptionComplete,
-} from "@/lib/agentSummary";
 import { writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
-//TODO: ทำให้มัน detect legal risk ในแต่ละ chunk เลย
 type AudioChunkMessage = {
   type: "audio-chunk";
   roomId: string;
@@ -51,12 +46,33 @@ type ESP32AudioChunkMessage = {
   audio: string; // base64 encoded
 };
 
+type TestAlertMessage = {
+  type: "test-alert";
+};
+
+type StartStreamMessage = {
+  type: "start-stream";
+};
+
+type AudioDataMessage = {
+  type: "audio-data";
+  audio: string;
+};
+
+type StopStreamMessage = {
+  type: "stop-stream";
+};
+
 type WebSocketMessage =
   | AudioChunkMessage
   | TranscribedAnalysisMessage
   | StartRecordingMessage
   | StopRecordingMessage
-  | ESP32AudioChunkMessage;
+  | ESP32AudioChunkMessage
+  | TestAlertMessage
+  | StartStreamMessage
+  | AudioDataMessage
+  | StopStreamMessage;
 
 type AnalyzerIssue = {
   riskLevel?: string;
@@ -247,6 +263,95 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     set.add(client);
     wsClients.set(roomId, set);
 
+    // Per-connection streaming STT session (for dashboard auto-recording)
+    let connSttStream: ReturnType<typeof createGoogleSTTStream> | null = null;
+    let isConnRecording = false;
+
+    const startConnSttStream = () => {
+      connSttStream = createGoogleSTTStream();
+
+      connSttStream.events.on(
+        "transcript",
+        async ({ text, isFinal }: { text: string; isFinal: boolean }) => {
+          if (!isFinal) {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "partial-transcript", text }));
+            }
+            return;
+          }
+
+          // Save final transcript to DB
+          try {
+            await prisma.transcriptChunk.create({
+              data: { roomId, content: text },
+            });
+          } catch (e) {
+            console.error("❌ Failed to save transcript chunk:", e);
+          }
+
+          // Send directly to this connection (like /ws/simple does)
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: "transcribed",
+                text,
+                timestamp: Date.now(),
+              }),
+            );
+          }
+
+          // Also broadcast to any other clients in the room (e.g., ESP32 or multiple tabs)
+          broadcastToRoom(roomId, {
+            type: "transcribed",
+            text,
+            speakers: undefined,
+            timestamp: Date.now(),
+          });
+
+          // Run risk analysis
+          try {
+            const room = await prisma.room.findFirst({
+              where: { id: roomId, accessToken },
+              select: { companyType: true, threadId: true },
+            });
+            if (room) {
+              await processTranscriptAnalysis(
+                roomId,
+                text,
+                room.companyType,
+                room.threadId,
+              );
+            }
+          } catch (e) {
+            console.error("❌ Failed to run transcript analysis:", e);
+          }
+        },
+      );
+
+      connSttStream.events.on("error", (err: Error) => {
+        console.error("❌ Room conn STT error:", err.message);
+        connSttStream = null;
+        if (isConnRecording) {
+          setTimeout(() => {
+            if (isConnRecording) startConnSttStream();
+          }, 500);
+        }
+      });
+
+      connSttStream.events.on("end", () => {
+        connSttStream = null;
+        if (isConnRecording) startConnSttStream(); // auto-restart on 5-min limit
+      });
+    };
+
+    const endConnSttStream = () => {
+      isConnRecording = false;
+      if (connSttStream) {
+        connSttStream.end();
+        connSttStream = null;
+      }
+    };
+
     ws.send(
       JSON.stringify({
         type: "connected",
@@ -274,6 +379,52 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
           handleStopRecording(message as StopRecordingMessage, roomId);
         } else if (message.type === "esp32-audio-chunk") {
           handleESP32AudioChunk(message as ESP32AudioChunkMessage);
+        } else if (message.type === "start-stream") {
+          endConnSttStream();
+          isConnRecording = true;
+          startConnSttStream();
+          ws.send(JSON.stringify({ type: "stream-started" }));
+          console.log(`🎤 Room ${roomId}: streaming STT started`);
+        } else if (message.type === "audio-data") {
+          if (connSttStream) {
+            const pcmBuffer = Buffer.from(
+              (message as AudioDataMessage).audio,
+              "base64",
+            );
+            connSttStream.write(pcmBuffer);
+          }
+        } else if (message.type === "stop-stream") {
+          endConnSttStream();
+          console.log(`⏹️ Room ${roomId}: streaming STT stopped`);
+        } else if (message.type === "test-alert") {
+          const samples = [
+            {
+              riskLevel: "HIGH",
+              issueDescription:
+                "ที่ประชุมมีมติโดยไม่ครบองค์ประชุมตามที่กฎหมายกำหนด (ต้องการ 2 ใน 3 ของผู้ถือหุ้น)",
+              recommendation: "ควรตรวจสอบจำนวนผู้ถือหุ้นและองค์ประชุมก่อนลงมติ",
+            },
+            {
+              riskLevel: "MEDIUM",
+              issueDescription:
+                "ไม่มีการแจ้งวาระล่วงหน้าตาม พ.ร.บ. บริษัทมหาชนจำกัด มาตรา 100",
+              recommendation:
+                "ควรส่งหนังสือเชิญประชุมพร้อมวาระล่วงหน้าไม่น้อยกว่า 14 วัน",
+            },
+            {
+              riskLevel: "LOW",
+              issueDescription:
+                "บันทึกรายงานการประชุมไม่ครบถ้วนตามข้อบังคับบริษัท",
+              recommendation:
+                "ควรระบุชื่อผู้เข้าร่วมประชุม คะแนนโหวต และมติที่ประชุมให้ครบถ้วน",
+            },
+          ];
+          const sample = samples[Math.floor(Math.random() * samples.length)];
+          broadcastToRoom(roomId, {
+            type: "legal-risk",
+            ...sample,
+            timestamp: new Date().toISOString(),
+          });
         }
       } catch {
         // console.error("Failed to process WebSocket message:", error);
@@ -286,78 +437,15 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
       }
     });
 
-    ws.on("close", async () => {
+    ws.on("close", () => {
+      endConnSttStream();
       console.log(`❌ WebSocket disconnected from room: ${roomId}`);
 
       const set = wsClients.get(roomId);
       set?.delete(client);
 
-      // If this was the last client in the room, handle final processing
       if (set?.size === 0) {
         wsClients.delete(roomId);
-        console.log(
-          `🔄 Last client disconnected from room ${roomId}, starting final processing`,
-        );
-
-        try {
-          // Wait for all transcription queues to complete
-          const finalTranscriptText =
-            await waitForTranscriptionComplete(roomId);
-
-          if (finalTranscriptText && finalTranscriptText.trim().length > 0) {
-            console.log(
-              `📝 Final transcript collected for room ${roomId}, calling agent for summary`,
-            );
-
-            // Broadcast processing status
-            broadcastToRoom(roomId, {
-              type: "finalizing",
-              message: "กำลังสรุป...",
-              timestamp: new Date().toISOString(),
-            });
-
-            // Call agent for summary (async, will callback via webhook)
-            await callAgentForSummary(roomId, finalTranscriptText);
-
-            console.log(`✅ Summary processing initiated for room ${roomId}`);
-          } else {
-            console.log(
-              `⚠️ No transcript text found for room ${roomId}, marking as ended without summary`,
-            );
-
-            // Update room status without summary
-            await prisma.room.update({
-              where: { id: roomId },
-              data: {
-                status: "ENDED",
-                endedAt: new Date(),
-                finalSummary: "ไม่มีข้อความที่จะสรุป",
-              },
-            });
-          }
-        } catch (error) {
-          console.error(
-            `❌ Error during final processing for room ${roomId}:`,
-            error,
-          );
-
-          // Update room with error status
-          try {
-            await prisma.room.update({
-              where: { id: roomId },
-              data: {
-                status: "ENDED",
-                endedAt: new Date(),
-                finalSummary: `ข้อผิดพลาด: ${error instanceof Error ? error.message : "Unknown error"}`,
-              },
-            });
-          } catch (dbError) {
-            console.error(
-              `❌ Failed to update room status for ${roomId}:`,
-              dbError,
-            );
-          }
-        }
       }
     });
 

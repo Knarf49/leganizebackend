@@ -2,6 +2,7 @@
 
 import { User, Circle } from "lucide-react";
 import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
 
 interface MeetingCardProps {
   meeting: {
@@ -14,6 +15,7 @@ interface MeetingCardProps {
     location: string;
     tags: string[];
     isLive?: boolean;
+    startedAt?: string;
   };
   isSelected?: boolean;
   onClick?: () => void;
@@ -24,6 +26,19 @@ export default function MeetingCard({
   isSelected,
   onClick,
 }: MeetingCardProps) {
+  const [isStarted, setIsStarted] = useState(() =>
+    meeting.startedAt ? new Date(meeting.startedAt) <= new Date() : true,
+  );
+
+  useEffect(() => {
+    if (!meeting.startedAt) return;
+    const check = () =>
+      setIsStarted(new Date(meeting.startedAt!) <= new Date());
+    check();
+    const interval = setInterval(check, 10000);
+    return () => clearInterval(interval);
+  }, [meeting.startedAt]);
+
   const tagColors: Record<string, string> = {
     red: "#ef4444",
     yellow: "#eab308",
@@ -59,7 +74,7 @@ export default function MeetingCard({
             <User size={24} strokeWidth={1.5} />
           </div>
           <div className="meeting-card-title-block">
-            {meeting.isLive && (
+            {meeting.isLive && isStarted && (
               <motion.div
                 className="meeting-card-live-badge"
                 animate={{ opacity: [1, 0.5, 1] }}
@@ -68,6 +83,12 @@ export default function MeetingCard({
                 <Circle size={8} fill="currentColor" />
                 <span>Live</span>
               </motion.div>
+            )}
+            {meeting.isLive && !isStarted && (
+              <div className="meeting-card-upcoming-badge">
+                <Circle size={8} fill="currentColor" />
+                <span>Upcoming</span>
+              </div>
             )}
             <h3 className="meeting-card-title">{meeting.title}</h3>
           </div>

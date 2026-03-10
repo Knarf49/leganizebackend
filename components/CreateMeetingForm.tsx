@@ -15,11 +15,15 @@ import { useState, useRef } from "react";
 import SignatureCanvas from "react-signature-canvas";
 import Link from "next/link";
 import { motion } from "framer-motion";
-//TODO:  add POST /api/room body companyType,meetingType,meetingTopic 
-//TODO:  add pdf loader from langchain
+import { CompanyType } from "@/app/types/meeting";
+import { useRouter } from "next/navigation";
 
 export default function CreateMeetingForm() {
-  const options1 = ["บจก. (บริษัท จำกัด)", "บมจ. (บริษัท มหาชน จำกัด)"];
+  const router = useRouter();
+  const options1: Array<{ label: string; value: CompanyType }> = [
+    { label: "บจก. (บริษัท จำกัด)", value: "LIMITED" },
+    { label: "บมจ. (บริษัท มหาชน จำกัด)", value: "PUBLIC_LIMITED" },
+  ];
   const options2 = [
     "ประชุมสามัญผู้ถือหุ้น",
     "ประชุมวิสามัญผู้ถือหุ้น",
@@ -27,7 +31,7 @@ export default function CreateMeetingForm() {
   ];
   const options3 = ["สามัญ", "วิสามัญ"];
 
-  const [selected1, setSelected1] = useState("");
+  const [selected1, setSelected1] = useState<CompanyType | "">("");
   const [selected2, setSelected2] = useState("");
   const [callerName, setCallerName] = useState("");
   const [subject, setSubject] = useState("");
@@ -40,6 +44,7 @@ export default function CreateMeetingForm() {
   const [agendas, setAgendas] = useState([""]);
   const [signerName, setSignerName] = useState("");
   const [signerPosition, setSignerPosition] = useState("");
+  const [aoaFile, setAoaFile] = useState<File | null>(null);
 
   const [isOpen1, setIsOpen1] = useState(false);
   const [isOpen2, setIsOpen2] = useState(false);
@@ -48,6 +53,8 @@ export default function CreateMeetingForm() {
   const [showCalendarSent, setShowCalendarSent] = useState(false);
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [errors, setErrors] = useState<{ [key: string]: boolean }>({});
+  const selectedCompanyLabel =
+    options1.find((opt) => opt.value === selected1)?.label ?? "";
 
   const sigCanvas = useRef<SignatureCanvas | null>(null);
   const [isSigned, setIsSigned] = useState(false);
@@ -122,7 +129,7 @@ export default function CreateMeetingForm() {
     setShowCalendarSent(false);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const isSigEmpty = sigCanvas.current ? sigCanvas.current.isEmpty() : true;
     const newErrors: { [key: string]: boolean } = {
       companyType: !selected1,
@@ -144,43 +151,45 @@ export default function CreateMeetingForm() {
     const hasError = Object.values(newErrors).some((v) => v);
     if (hasError) return;
 
-    // ============================================================
-    // TODO [BACKEND]: Wire up meeting creation API here.
-    //
-    // 1. Build the payload:
-    //    import { CreateMeetingPayload } from "../types";
-    //    const payload: CreateMeetingPayload = {
-    //      companyType: selected1 as CompanyType,
-    //      meetingType: selected2 as MeetingType,
-    //      meetingSubType: meetingSubType as MeetingSubType,
-    //      callerName,
-    //      subject,
-    //      meetingNo,
-    //      attendees,
-    //      location,
-    //      meetingDate,
-    //      dateSent: meetingDateSent,
-    //      agendas,
-    //      signerName,
-    //      signerPosition,
-    //      signatureDataUrl: sigCanvas.current?.toDataURL("image/png") ?? "",
-    //    };
-    //
-    // 2. POST to /api/meetings:
-    //    const res = await fetch("/api/meetings", {
-    //      method: "POST",
-    //      headers: { "Content-Type": "application/json" },
-    //      body: JSON.stringify(payload),
-    //    });
-    //    const result = await res.json();
-    //
-    // 3. Handle response:
-    //    if (result.success) router.push(`/summary`);
-    //    else setErrors({ ...errors, submit: true });
-    //
-    // See: HANDOFF.md § "API Routes to Implement"
-    // See: app/types/meeting.ts for all type definitions
-    // ============================================================
+    // Build FormData to support file upload
+    const formData = new FormData();
+    formData.append("companyType", selected1);
+    formData.append("meetingType", selected2);
+    formData.append("calledBy", callerName);
+    formData.append("location", location);
+    formData.append("agendas", JSON.stringify(agendas));
+    formData.append("startedAt", new Date().toISOString());
+
+    // Append AOA file if present (will be processed immediately on server)
+    if (aoaFile) {
+      formData.append("aoaFile", aoaFile);
+    }
+
+    // POST to /api/room with FormData
+    try {
+      const res = await fetch("/api/room", {
+        method: "POST",
+        body: formData, // FormData sets Content-Type automatically
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        console.error("Failed to create room:", error);
+        setErrors({ ...errors, submit: true });
+        return;
+      }
+
+      const result = await res.json();
+      console.log("Room created:", result);
+
+      // Navigate to record page
+      if (result.id && result.accessToken) {
+        router.push(`/dashboard`);
+      }
+    } catch (error) {
+      console.error("Error creating room:", error);
+      setErrors({ ...errors, submit: true });
+    }
   };
 
   const renderCalendarGrid = (onSelectDay: (day: number) => void) => (
@@ -277,7 +286,7 @@ export default function CreateMeetingForm() {
               className={`create-form-select ${errors.companyType ? "create-form-select-error" : ""}`}
             >
               <span className={selected1 ? "" : "create-form-placeholder"}>
-                {selected1 || "คลิกเลือกประเภทบริษัท..."}
+                {selectedCompanyLabel || "คลิกเลือกประเภทบริษัท..."}
               </span>
               <ChevronDown size={18} />
             </button>
@@ -289,15 +298,15 @@ export default function CreateMeetingForm() {
               >
                 {options1.map((opt) => (
                   <button
-                    key={opt}
+                    key={opt.value}
                     onClick={() => {
-                      setSelected1(opt);
+                      setSelected1(opt.value);
                       setIsOpen1(false);
                       setErrors({ ...errors, companyType: false });
                     }}
                     className="create-form-dropdown-item"
                   >
-                    {opt}
+                    {opt.label}
                   </button>
                 ))}
               </motion.div>
@@ -578,9 +587,28 @@ export default function CreateMeetingForm() {
           </div>
         </div>
 
+        {/* 10. Optional AOA upload */}
+        <div className="create-form-field">
+          <div className="create-form-field-header">
+            <label>ข้อบังคับบริษัท (AOA)</label>
+          </div>
+          <input
+            type="file"
+            accept=".pdf,.doc,.docx"
+            onChange={(e) => setAoaFile(e.target.files?.[0] ?? null)}
+            className="create-form-input"
+          />
+          <p className="create-form-hint">
+            แนบไฟล์ได้ (ไม่บังคับ): PDF, DOC, DOCX
+          </p>
+          {aoaFile && (
+            <p className="create-form-hint">ไฟล์ที่เลือก: {aoaFile.name}</p>
+          )}
+        </div>
+
         <div className="create-form-divider" />
 
-        {/* 10. Signer */}
+        {/* 11. Signer */}
         <div className="create-form-field">
           <div className="create-form-field-header">
             <label>ลงชื่อ</label>
@@ -602,7 +630,7 @@ export default function CreateMeetingForm() {
           />
         </div>
 
-        {/* 11. Position */}
+        {/* 12. Position */}
         <div className="create-form-field">
           <div className="create-form-field-header">
             <label>ตำแหน่ง</label>
@@ -624,7 +652,7 @@ export default function CreateMeetingForm() {
           />
         </div>
 
-        {/* 12. Digital signature */}
+        {/* 13. Digital signature */}
         <div className="create-form-field">
           <div className="create-form-field-header">
             <label className="create-form-label-with-icon">
@@ -656,7 +684,7 @@ export default function CreateMeetingForm() {
           </div>
         </div>
 
-        {/* 13. Date sent */}
+        {/* 14. Date sent */}
         <div className="create-form-field">
           <div className="create-form-field-header">
             <label>วันที่ส่งนัดหมาย</label>

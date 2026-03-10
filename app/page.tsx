@@ -1,82 +1,126 @@
 "use client";
 
-import MeetingCard from "@/components/MeetingCard";
-import MeetingDetails from "@/components/MeetingDetail";
+import CalendarView from "@/components/CalendarView";
 import { motion } from "framer-motion";
+import { Clock, MapPin } from "lucide-react";
+import { useEffect, useState } from "react";
 
-// TODO [BACKEND]: Replace with GET /api/room
-const liveMeeting = {
-  title: "พิจารณากำหนดค่าตอบแทน\nคณะกรรมการบริษัท",
-  company: "ABC จำกัด",
-  type: "การประชุมสามัญประจำปี",
-  no: "2/2569",
-  date: "25 มกราคม 2569",
-  time: "13:30 น. - 16:30 น.",
-  location: "ณ ห้องประชุมบอร์ดรูม",
-  tags: ["red", "yellow"],
-  isLive: true,
+type Room = {
+  id: string;
+  meetingType: "AGM" | "EGM" | "BOD";
+  location: string;
+  startedAt: string;
+  status: string;
 };
 
-//TODO: เพิ่มให้ fetch room จากอันที่เวลาใกล้ปัจจุบันสุดมา
-const meetingDetails = {
-  title: "พิจารณากำหนดค่าตอบแทนคณะกรรมการบริษัท",
-  time: "13:30 น. - 16:30 น.",
-  date: "25 มกราคม 2569",
-  agendas: [
-    {
-      no: 1,
-      title: "เรื่องที่ประธานแจ้งให้ทราบ",
-      description: "",
-      subItems: [
-        "1.1 รายงานภาพรวมผลประกอบการไตรมาส 1/2569",
-        "1.2 แนวโน้มธุรกิจและสถานการณ์เศรษฐกิจที่เกี่ยวข้อง",
-      ],
-    },
-    {
-      no: 2,
-      title: "รับรองรายงานการประชุมครั้งที่ผ่านมา",
-      description: "",
-      subItems: [
-        "2.1 รับรองรายงานการประชุมคณะกรรมการบริษัท ครั้งที่ 1/2569 ซึ่งประชุมเมื่อวันที่ 20 มกราคม 2569",
-      ],
-    },
-    {
-      no: 3,
-      title: "เรื่องเพื่อพิจารณา",
-      description: "",
-      subItems: [
-        "3.1 พิจารณากำหนดอัตราค่าตอบแทนกรรมการ",
-        "รายละเอียดตามเอกสารแนบ",
-      ],
-    },
-  ],
-  resolution:
-    "ฝ่ายเลขานุบริษัทเสนอให้ที่ประชุมพิจารณาอนุมัติอัตราค่าตอบแทนคณะกรรมการบริษัท ประจำปี 2569 ตามรายละเอียดในเอกสารแนบ หรือพิจารณาปรับแก้ไขตามที่เห็นสมควร โดยให้มีผลตั้งแต่วันที่ 1 เมษายน 2569 เป็นต้นไป",
+const MEETING_TYPE_LABELS: Record<string, string> = {
+  AGM: "ประชุมสามัญผู้ถือหุ้น",
+  EGM: "ประชุมวิสามัญผู้ถือหุ้น",
+  BOD: "ประชุมคณะกรรมการบริษัท",
 };
+
+const MEETING_TYPE_COLORS: Record<string, string> = {
+  AGM: "#22c55e",
+  EGM: "#3b82f6",
+  BOD: "#f97316",
+};
+
+// const upcomingMeetings = [
+//   { title: "ประชุมคณะกรรมการบริษัท ครั้งที่ 3/2569", date: "15 กุมภาพันธ์ 2569", time: "10:00 น. - 12:00 น.", location: "ห้องประชุมชั้น 12", attendees: 8, status: "upcoming" },
+//   { title: "ประชุมสามัญผู้ถือหุ้นครั้งที่ 1/2569", date: "21 กุมภาพันธ์ 2569", time: "14:00 น. - 17:00 น.", location: "ห้องประชุมใหญ่ ชั้น 5", attendees: 45, status: "upcoming" },
+//   { title: "ประชุมวิสามัญ เรื่องงบประมาณ", date: "24 กุมภาพันธ์ 2569", time: "09:00 น. - 11:30 น.", location: "ห้อง Meeting Room B", attendees: 12, status: "upcoming" },
+// ];
+
+// const calendarEvents = [
+//   { day: 15, color: "#f97316", label: "ประชุมคณะกรรมการ" },
+//   { day: 21, color: "#22c55e", label: "ประชุมสามัญ" },
+//   { day: 24, color: "#f97316", label: "ประชุมวิสามัญ" },
+// ];
 
 export default function Home() {
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [totalRooms, setTotalRooms] = useState<number>(0);
+
+  useEffect(() => {
+    fetch("/api/room?limit=3")
+      .then((res) => res.json())
+      .then((data) => {
+        const sorted = (data.rooms ?? []).slice().sort((a: Room, b: Room) => {
+          const now = Date.now();
+          return (
+            Math.abs(new Date(a.startedAt).getTime() - now) -
+            Math.abs(new Date(b.startedAt).getTime() - now)
+          );
+        });
+        setRooms(sorted);
+        setTotalRooms(data.total ?? sorted.length);
+      })
+      .catch((err) => console.error("Failed to fetch rooms:", err));
+  }, []);
+
+  const calendarEvents = rooms.map((room) => ({
+    day: new Date(room.startedAt).getDate(),
+    color: MEETING_TYPE_COLORS[room.meetingType] ?? "#f97316",
+    label: MEETING_TYPE_LABELS[room.meetingType] ?? room.meetingType,
+  }));
+
   return (
     <motion.div
-      className="live-meeting-page"
+      className="dashboard-page"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.35 }}
     >
-      <div className="live-meeting-layout">
-        <div className="live-meeting-left">
-          <MeetingCard meeting={liveMeeting} isSelected />
+      <header className="dashboard-header">
+        <h1>ภาพรวมข้อมูล</h1>
+        <p className="dashboard-subtitle">สรุปกำหนดการประชุมและข้อมูลสำคัญ</p>
+      </header>
+
+      <div className="dashboard-grid">
+        <div className="dashboard-calendar-section">
+          <CalendarView events={calendarEvents} />
         </div>
-        <div className="live-meeting-right">
-          <MeetingDetails meeting={meetingDetails} />
+
+        <div className="dashboard-meetings-section">
+          <div className="dashboard-meetings-header">
+            <h2>การประชุมครั้งต่อไป</h2>
+            <span className="dashboard-meeting-count">{totalRooms} รายการ</span>
+          </div>
+
+          <div className="dashboard-meetings-list">
+            {rooms.map((room, index) => (
+              <motion.div
+                key={room.id}
+                className="dashboard-meeting-item"
+                initial={{ opacity: 0, x: 12 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.3, delay: index * 0.08 }}
+                whileHover={{ x: 4 }}
+              >
+                <div className="dashboard-meeting-item-header">
+                  <h3>
+                    {MEETING_TYPE_LABELS[room.meetingType] ?? room.meetingType}
+                  </h3>
+                </div>
+                <div className="dashboard-meeting-item-meta">
+                  <span className="dashboard-meeting-meta-item">
+                    <Clock size={14} />
+                    {new Date(room.startedAt).toLocaleTimeString("th-TH", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}{" "}
+                    น.
+                  </span>
+                  <span className="dashboard-meeting-meta-item">
+                    <MapPin size={14} />
+                    {room.location}
+                  </span>
+                </div>
+              </motion.div>
+            ))}
+          </div>
         </div>
       </div>
-
-      <footer className="live-meeting-footer">
-        <p>
-          การประชุมทั้งหมดนี้ดำเนินการโดยสอดคล้องกับข้อกำหนดทางกฎหมายสำหรับบริษัทจำกัด
-          และผ่านการพิจารณาตรวจสอบตามข้อบังคับบริษัท (Articles of Association)
-        </p>
-      </footer>
     </motion.div>
   );
 }

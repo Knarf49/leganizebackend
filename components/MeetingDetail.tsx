@@ -1,7 +1,7 @@
 "use client";
 
 import { Clock } from "lucide-react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useRef, useEffect, useState } from "react";
 
 interface Agenda {
@@ -19,12 +19,14 @@ interface MeetingDetailsProps {
     agendas: Agenda[];
     resolution?: string;
   };
+  roomId?: string;
+  accessToken?: string;
 }
 
 function WaveformVisualization() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
-  const [isActive, setIsActive] = useState(true);
+  const isActive = true;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -112,7 +114,117 @@ function WaveformVisualization() {
   );
 }
 
-export default function MeetingDetails({ meeting }: MeetingDetailsProps) {
+interface LegalRiskIssue {
+  riskLevel?: string;
+  issueDescription?: string;
+  urgencyLevel?: string;
+}
+
+function WaveformTextOverlay({
+  roomId,
+  accessToken,
+}: {
+  roomId?: string;
+  accessToken?: string;
+}) {
+  const [alerts, setAlerts] = useState<string[]>([]);
+  const [index, setIndex] = useState(0);
+
+  // Connect WebSocket and listen for legal-risk events
+  useEffect(() => {
+    if (!roomId || !accessToken) return;
+
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const host = window.location.host;
+    const url = `${protocol}://${host}/ws?roomId=${encodeURIComponent(roomId)}&accessToken=${encodeURIComponent(accessToken)}`;
+
+    const ws = new WebSocket(url);
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data as string);
+        if (data.type === "legal-risk") {
+          if (Array.isArray(data.issues)) {
+            // legacy format: array of issues
+            const descriptions: string[] = (data.issues as LegalRiskIssue[])
+              .filter((issue) => issue.issueDescription)
+              .map((issue) => issue.issueDescription as string);
+            if (descriptions.length > 0) {
+              setAlerts((prev) => [...prev, ...descriptions]);
+            }
+          } else if (data.issueDescription) {
+            // current format: single issueDescription on the message
+            setAlerts((prev) => [...prev, data.issueDescription as string]);
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [roomId, accessToken]);
+
+  // Advance through alerts once — stop at the last one
+  useEffect(() => {
+    if (alerts.length === 0) return;
+    if (index >= alerts.length - 1) return; // already at last item, stop
+    const timer = setTimeout(() => {
+      setIndex((prev) => prev + 1);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [index, alerts]);
+
+  const currentText = alerts.length > 0 ? alerts[index] : null;
+
+  return (
+    <div style={{ position: "relative" }}>
+      <WaveformVisualization />
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          pointerEvents: "none",
+          overflow: "hidden",
+        }}
+      >
+        <AnimatePresence mode="wait">
+          {currentText && (
+            <motion.p
+              key={`${index}-${currentText}`}
+              style={{
+                margin: 0,
+                fontSize: "0.95rem",
+                fontWeight: 600,
+                color: "rgba(239, 68, 68, 0.9)",
+                textAlign: "center",
+                position: "absolute",
+                padding: "0 1rem",
+              }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.45, ease: "easeInOut" }}
+            >
+              {currentText}
+            </motion.p>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
+
+export default function MeetingDetails({
+  meeting,
+  roomId,
+  accessToken,
+}: MeetingDetailsProps) {
   const agendaContainerRef = useRef<HTMLDivElement>(null);
 
   return (
@@ -173,8 +285,8 @@ export default function MeetingDetails({ meeting }: MeetingDetailsProps) {
         </motion.p>
       )}
 
-      {/* Waveform */}
-      <WaveformVisualization />
+      {/* Waveform with floating text overlay */}
+      <WaveformTextOverlay roomId={roomId} accessToken={accessToken} />
     </motion.div>
   );
 }

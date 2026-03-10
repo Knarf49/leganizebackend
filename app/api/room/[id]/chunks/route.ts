@@ -257,7 +257,6 @@ export async function POST(
     });
     console.log(`📋 Analyzer result:`, analyzerResult);
 
-    //TODO: alert ไปที่ frontend ผ่าน sse
     console.log(`🔍 Debugging analyzerResult:`, {
       result: analyzerResult,
       type: typeof analyzerResult,
