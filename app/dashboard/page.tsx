@@ -5,7 +5,9 @@ import MeetingDetails from "@/components/MeetingDetail";
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 //TODO: แก้ summary page
-//TODO: fix transcript's style
+//TODO: connect all routing
+//TODO: เปลี่ยน google cloud stt --> typhoon asr api
+
 type Room = {
   id: string;
   meetingType: "AGM" | "EGM" | "BOD";

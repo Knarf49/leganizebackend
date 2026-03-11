@@ -3,6 +3,7 @@
 import CalendarView from "@/components/CalendarView";
 import { motion } from "framer-motion";
 import { Clock, MapPin } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 type Room = {
@@ -42,7 +43,7 @@ export default function Home() {
   const [totalRooms, setTotalRooms] = useState<number>(0);
 
   useEffect(() => {
-    fetch("/api/room?limit=3")
+    fetch("/api/room?limit=3&status=ACTIVE")
       .then((res) => res.json())
       .then((data) => {
         const sorted = (data.rooms ?? []).slice().sort((a: Room, b: Room) => {
@@ -97,25 +98,28 @@ export default function Home() {
                 transition={{ duration: 0.3, delay: index * 0.08 }}
                 whileHover={{ x: 4 }}
               >
-                <div className="dashboard-meeting-item-header">
-                  <h3>
-                    {MEETING_TYPE_LABELS[room.meetingType] ?? room.meetingType}
-                  </h3>
-                </div>
-                <div className="dashboard-meeting-item-meta">
-                  <span className="dashboard-meeting-meta-item">
-                    <Clock size={14} />
-                    {new Date(room.startedAt).toLocaleTimeString("th-TH", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}{" "}
-                    น.
-                  </span>
-                  <span className="dashboard-meeting-meta-item">
-                    <MapPin size={14} />
-                    {room.location}
-                  </span>
-                </div>
+                <Link href="/dashboard">
+                  <div className="dashboard-meeting-item-header">
+                    <h3>
+                      {MEETING_TYPE_LABELS[room.meetingType] ??
+                        room.meetingType}
+                    </h3>
+                  </div>
+                  <div className="dashboard-meeting-item-meta">
+                    <span className="dashboard-meeting-meta-item">
+                      <Clock size={14} />
+                      {new Date(room.startedAt).toLocaleTimeString("th-TH", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}{" "}
+                      น.
+                    </span>
+                    <span className="dashboard-meeting-meta-item">
+                      <MapPin size={14} />
+                      {room.location}
+                    </span>
+                  </div>
+                </Link>
               </motion.div>
             ))}
           </div>

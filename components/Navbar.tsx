@@ -19,9 +19,9 @@ export default function Navbar() {
   const pathname = usePathname();
 
   const navItems = [
-    { label: "ถ่ายทอดสดการประชุม", href: "/", icon: Radio },
-    { label: "สรุปการประชุม", href: "/summary", icon: ClipboardList },
-    { label: "ภาพรวมข้อมูล", href: "/dashboard", icon: LayoutDashboard },
+    { label: "ถ่ายทอดสดการประชุม", href: "/dashboard", icon: Radio },
+    { label: "สรุปการประชุม", href: "/summarize", icon: ClipboardList },
+    { label: "ภาพรวมข้อมูล", href: "/", icon: LayoutDashboard },
   ];
 
   const currentItem =
