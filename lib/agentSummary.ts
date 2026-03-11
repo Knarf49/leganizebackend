@@ -113,6 +113,17 @@ export async function waitForTranscriptionComplete(
     let waitTime = 0;
     let allTranscribedText = "";
 
+    const fetchFromDB = async () => {
+      const dbChunks = await prisma.transcriptChunk.findMany({
+        where: { roomId },
+        orderBy: { createdAt: "asc" },
+      });
+      return dbChunks
+        .map((c) => c.content)
+        .join(" ")
+        .trim();
+    };
+
     const checkComplete = async () => {
       const roomQueue = transcriptionQueues.get(roomId);
 
@@ -120,15 +131,16 @@ export async function waitForTranscriptionComplete(
         !roomQueue ||
         (roomQueue.queue.length === 0 && !roomQueue.processing)
       ) {
-        // Queue is empty — read all chunks from Redis and join as full transcript
+        // Queue is empty — read from DB instead of Redis for better consistency
+        allTranscribedText = await fetchFromDB();
+
+        // Also cleanup Redis just in case
         const redisKey = `transcript:${roomId}`;
-        const chunks = await redis.lrange(redisKey, 0, -1);
-        allTranscribedText = chunks.join(" ").trim();
-        console.log(
-          `✅ All transcription complete for room ${roomId}, total text length: ${allTranscribedText.length} (${chunks.length} chunks from Redis)`,
-        );
-        // Clean up Redis key after reading
         await redis.del(redisKey);
+
+        console.log(
+          `✅ All transcription complete for room ${roomId}, total text length: ${allTranscribedText.length} from DB`,
+        );
         resolve(allTranscribedText);
         return;
       }
@@ -138,10 +150,11 @@ export async function waitForTranscriptionComplete(
         console.log(
           `⏰ Timeout waiting for transcription to complete for room ${roomId}`,
         );
+        allTranscribedText = await fetchFromDB();
+
         const redisKey = `transcript:${roomId}`;
-        const chunks = await redis.lrange(redisKey, 0, -1);
-        allTranscribedText = chunks.join(" ").trim();
         await redis.del(redisKey);
+
         resolve(allTranscribedText);
         return;
       }
