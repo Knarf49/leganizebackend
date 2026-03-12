@@ -106,6 +106,7 @@ type WebSocketClient = {
   accessToken: string;
   deviceId?: string; // For ESP32 clients
   clientType?: string; // "browser" | "esp32"
+  endSttStream?: () => void;
 };
 
 type PendingESP32 = {
@@ -274,9 +275,12 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
         "transcript",
         async ({ text, isFinal }: { text: string; isFinal: boolean }) => {
           if (!isFinal) {
+            // Send to current connection
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "partial-transcript", text }));
             }
+            // Broadcast partial transcript so dashboard can see live typing from ESP32
+            broadcastToRoom(roomId, { type: "partial-transcript", text });
             return;
           }
 
@@ -352,6 +356,8 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
       }
     };
 
+    client.endSttStream = endConnSttStream;
+
     ws.send(
       JSON.stringify({
         type: "connected",
@@ -379,6 +385,20 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
           handleStopRecording(message as StopRecordingMessage, roomId);
         } else if (message.type === "esp32-audio-chunk") {
           handleESP32AudioChunk(message as ESP32AudioChunkMessage);
+          
+          // Auto-start STT STT stream for ESP32 connection
+          if (!isConnRecording && clientType === "esp32") {
+            console.log(`🎤 Room ${roomId}: auto-starting STT for ESP32 hardware mic`);
+            isConnRecording = true;
+            startConnSttStream();
+          }
+          if (connSttStream && clientType === "esp32") {
+            const pcmBuffer = Buffer.from(
+              (message as ESP32AudioChunkMessage).audio,
+              "base64",
+            );
+            connSttStream.write(pcmBuffer);
+          }
         } else if (message.type === "start-stream") {
           endConnSttStream();
           isConnRecording = true;
@@ -1074,6 +1094,10 @@ function handleStopRecording(message: StopRecordingMessage, roomId: string) {
       }),
     );
     console.log(`⏹️ Sent stop-recording command to ESP32: ${targetDeviceId}`);
+    // Also stop the STT stream attached to this ESP32 connection
+    if (esp32Client.endSttStream) {
+      esp32Client.endSttStream();
+    }
   } catch (error) {
     console.error(`❌ Failed to send stop-recording to ESP32:`, error);
   }
