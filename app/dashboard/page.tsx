@@ -342,6 +342,22 @@ export default function DashboardPage() {
               accessToken={selectedRoom.accessToken}
             />
           )}
+          {partialTranscript && (
+            <div
+              style={{
+                marginTop: "0.75rem",
+                padding: "0.55rem 0.9rem",
+                borderRadius: "0.5rem",
+                background: "rgba(99,102,241,0.08)",
+                border: "1px solid rgba(99,102,241,0.25)",
+                color: "#6366f1",
+                fontSize: "0.85rem",
+                fontStyle: "italic",
+              }}
+            >
+              🎙 <span style={{ opacity: 0.8 }}>{partialTranscript}</span>
+            </div>
+          )}
           {selectedRoom && (
             <div
               style={{
@@ -356,6 +372,9 @@ export default function DashboardPage() {
                 onClick={() => handleShowTranscript()}
               >
                 📄 แสดง Transcript
+                {transcriptChunks.length > 0
+                  ? ` (${transcriptChunks.length})`
+                  : ""}
               </button>
               <button
                 onClick={isRecording ? stopRecording : startRecording}

@@ -328,7 +328,7 @@ export function createGoogleSTTStream(options?: {
         enableWordTimeOffsets: true,
         diarizationConfig: {
           enableSpeakerDiarization: true,
-          minSpeakerCount: options?.minSpeakers ?? 2,
+          minSpeakerCount: options?.minSpeakers ?? 1,
           maxSpeakerCount: options?.maxSpeakers ?? 6,
         },
       },
