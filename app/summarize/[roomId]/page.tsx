@@ -2,7 +2,8 @@
 
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-
+//TODO: add summary page's UI
+//TODO: test aoa as AI context
 interface Room {
   id: string;
   status: string;
