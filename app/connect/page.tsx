@@ -294,23 +294,59 @@ function RoomMonitorContent() {
     // แปลง base64 chunks เป็น audio blob
     if (esp32AudioChunksRef.current.length > 0) {
       try {
-        // Concatenate all base64 strings
-        const combinedBase64 = esp32AudioChunksRef.current.join("");
+        const byteArrays: Uint8Array[] = [];
+        let totalLength = 0;
 
-        // Convert base64 to binary
-        const binaryString = atob(combinedBase64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
+        // แยกถอดรหัสที่ละ chunk ป้องกันปัญหา Invalid padding
+        for (const b64 of esp32AudioChunksRef.current) {
+          const binaryString = atob(b64);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          byteArrays.push(bytes);
+          totalLength += bytes.length;
         }
 
-        // Create audio blob
-        const audioBlob = new Blob([bytes], { type: "audio/wav" });
+        // นำ Bytes ทั้งหมดประกอบเข้าด้วยกัน
+        const pcmData = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const bytes of byteArrays) {
+          pcmData.set(bytes, offset);
+          offset += bytes.length;
+        }
+
+        // สร้าง WAV header สำหรับ raw PCM (16-bit, 16000Hz, Mono)
+        const wavHeader = new ArrayBuffer(44);
+        const view = new DataView(wavHeader);
+
+        const writeString = (view: DataView, offset: number, string: string) => {
+          for (let i = 0; i < string.length; i++) {
+            view.setUint8(offset + i, string.charCodeAt(i));
+          }
+        };
+
+        writeString(view, 0, "RIFF");
+        view.setUint32(4, 36 + totalLength, true);
+        writeString(view, 8, "WAVE");
+        writeString(view, 12, "fmt ");
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true); // 1 = PCM
+        view.setUint16(22, 1, true); // 1 channel
+        view.setUint32(24, 16000, true); // 16000 Hz
+        view.setUint32(28, 16000 * 2, true); // Byte rate (16000 * 1 * 2)
+        view.setUint16(32, 2, true); // Block align (1 * 2)
+        view.setUint16(34, 16, true); // 16 bits per sample
+        writeString(view, 36, "data");
+        view.setUint32(40, totalLength, true);
+
+        // นำ Header วางรวมกับ PCM Data
+        const audioBlob = new Blob([wavHeader, pcmData], { type: "audio/wav" });
         const url = URL.createObjectURL(audioBlob);
         setEsp32AudioUrl(url);
 
         console.log(
-          `✅ Created audio from ${esp32AudioChunksRef.current.length} chunks`,
+          `✅ Created WAV audio from ${esp32AudioChunksRef.current.length} chunks`,
         );
       } catch (error) {
         console.error("❌ Error creating audio from ESP32 chunks:", error);
