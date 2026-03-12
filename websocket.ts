@@ -385,10 +385,12 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
           handleStopRecording(message as StopRecordingMessage, roomId);
         } else if (message.type === "esp32-audio-chunk") {
           handleESP32AudioChunk(message as ESP32AudioChunkMessage);
-          
+
           // Auto-start STT STT stream for ESP32 connection
           if (!isConnRecording && clientType === "esp32") {
-            console.log(`🎤 Room ${roomId}: auto-starting STT for ESP32 hardware mic`);
+            console.log(
+              `🎤 Room ${roomId}: auto-starting STT for ESP32 hardware mic`,
+            );
             isConnRecording = true;
             startConnSttStream();
           }

@@ -263,7 +263,7 @@ export default function DashboardPage() {
     ws.onopen = () => {
       // console.log("[Dashboard WS] connected to room", selectedRoom.id);
       // ไม่บังคับ auto start PC mic เพื่อให้สามารถใช้ ESP32 เพียวๆ ได้
-      // startRecording(); 
+      // startRecording();
     };
 
     ws.onerror = (e) => {
@@ -362,15 +362,19 @@ export default function DashboardPage() {
                 style={{
                   padding: "0.45rem 1.1rem",
                   borderRadius: "0.5rem",
-                  border: `1px solid ${isRecording ? 'var(--color-danger)' : '#4f46e5'}`,
-                  background: isRecording ? 'var(--color-danger-light)' : 'rgba(79, 70, 229, 0.1)',
-                  color: isRecording ? 'var(--color-danger)' : '#4f46e5',
+                  border: `1px solid ${isRecording ? "var(--color-danger)" : "#4f46e5"}`,
+                  background: isRecording
+                    ? "var(--color-danger-light)"
+                    : "rgba(79, 70, 229, 0.1)",
+                  color: isRecording ? "var(--color-danger)" : "#4f46e5",
                   fontWeight: 600,
                   cursor: "pointer",
                   fontSize: "0.85rem",
                 }}
               >
-                {isRecording ? "⏹ หยุดไมค์คอมฯ" : "🎙️ เปิดไมค์คอมฯ (ถ้าไม่มี ESP32)"}
+                {isRecording
+                  ? "⏹ หยุดไมค์คอมฯ"
+                  : "🎙️ เปิดไมค์คอมฯ (ถ้าไม่มี ESP32)"}
               </button>
             </div>
           )}
