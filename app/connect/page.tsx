@@ -320,7 +320,11 @@ function RoomMonitorContent() {
         const wavHeader = new ArrayBuffer(44);
         const view = new DataView(wavHeader);
 
-        const writeString = (view: DataView, offset: number, string: string) => {
+        const writeString = (
+          view: DataView,
+          offset: number,
+          string: string,
+        ) => {
           for (let i = 0; i < string.length; i++) {
             view.setUint8(offset + i, string.charCodeAt(i));
           }
