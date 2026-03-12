@@ -699,8 +699,8 @@ function RoomMonitorContent() {
                           ESP32 ต้องส่ง message ผ่าน WebSocket ในรูปแบบ:
                           <br />
                           <code className="mt-2 block bg-white border border-gray-200 text-gray-800 px-3 py-2 rounded-lg font-mono text-[10px] break-all">
-                            &#123;"type": "esp32-audio-chunk", "audio":
-                            "base64_data"&#125;
+                            &#123;$#34;type$#34;: $#34;esp32-audio-chunk$#34;,
+                            $#34;audio$#34;: $#34;base64_data$#34;&#125;
                           </code>
                         </span>
                       </p>
