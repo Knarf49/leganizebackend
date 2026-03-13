@@ -169,6 +169,20 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         Serial.println("⏹️ Stop recording command received");
         isRecording = false;
 
+      } else if (strcmp(msgType, "go-pending") == 0) {
+        // Server is asking ESP32 to release this room and go back to pending mode
+        Serial.println("🔄 go-pending received — returning to pending mode");
+        isRecording = false;
+        roomId = "";
+        accessToken = "";
+        configured = false;
+        // Reconnect without roomId → server will put us in pending pool
+        String path = "/ws?type=esp32&deviceId=";
+        path += DEVICE_ID;
+        webSocket.disconnect();
+        delay(500);
+        webSocket.beginSSL(wsHost, wsPort, path.c_str());
+
       } else {
         Serial.printf("📨 Message: %s\n", (char*)payload);
       }

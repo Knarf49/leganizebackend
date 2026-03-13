@@ -5,6 +5,14 @@ import Link from "next/link";
 
 type PendingDevice = { deviceId: string };
 
+type ActiveRoom = {
+  id: string;
+  meetingType: string;
+  location: string;
+  startedAt: string;
+  accessToken: string;
+};
+
 function RoomMonitorContent() {
   const searchParams = useSearchParams();
   const roomId = searchParams.get("roomId") || "";
@@ -26,8 +34,25 @@ function RoomMonitorContent() {
   const [esp32RecordingTime, setEsp32RecordingTime] = useState(0);
   const [esp32ChunkCount, setEsp32ChunkCount] = useState(0);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  const [activeRooms, setActiveRooms] = useState<ActiveRoom[]>([]);
+  const [isLoadingRooms, setIsLoadingRooms] = useState(false);
 
-  // Create test room automatically
+  // Fetch active rooms when no roomId
+  useEffect(() => {
+    if (roomId) return;
+    setIsLoadingRooms(true);
+    fetch("/api/room?limit=20&status=ACTIVE")
+      .then((r) => r.json())
+      .then((data) => setActiveRooms(data.rooms ?? []))
+      .catch(() => {})
+      .finally(() => setIsLoadingRooms(false));
+  }, [roomId]);
+
+  const selectRoom = (room: ActiveRoom) => {
+    window.location.href = `/connect?roomId=${room.id}&accessToken=${room.accessToken}`;
+  };
+
+  // Create new test room
   const createTestRoom = async () => {
     setIsCreatingRoom(true);
     try {
@@ -54,6 +79,12 @@ function RoomMonitorContent() {
       alert("ไม่สามารถสร้าง room ได้ กรุณาลองใหม่อีกครั้ง");
       setIsCreatingRoom(false);
     }
+  };
+
+  const MEETING_TYPE_LABELS: Record<string, string> = {
+    AGM: "ประชุมสามัญผู้ถือหุ้น",
+    EGM: "ประชุมวิสามัญผู้ถือหุ้น",
+    BOD: "ประชุมคณะกรรมการ",
   };
 
   // Poll หา ESP32 ที่รออยู่
@@ -135,7 +166,18 @@ function RoomMonitorContent() {
     configWs.onopen = () => {
       setLinkedDevice(deviceId);
       setPendingDevices((prev) => prev.filter((d) => d.deviceId !== deviceId));
+
+      // เก็บ ESP32 deviceId ไว้ใน localStorage เพื่อให้ /dashboard ใช้ auto-start
+      try {
+        localStorage.setItem(`esp32:${roomId}`, JSON.stringify({ deviceId }));
+      } catch {}
+
       configWs.close();
+
+      // Redirect ไป /dashboard หลังจาก ESP32 reconnect พร้อม config ใหม่
+      setTimeout(() => {
+        window.location.href = "/dashboard";
+      }, 1200);
     };
   };
 
@@ -197,16 +239,57 @@ function RoomMonitorContent() {
         <div className="max-w-xl w-full bg-white border border-gray-200 shadow-xl rounded-3xl p-8 md:p-12">
           <div className="flex flex-col items-center gap-4 mb-8">
             <div className="bg-indigo-50 p-4 rounded-full">
-              <span className="text-4xl block">🎙️</span>
+              <span className="text-4xl block">📡</span>
             </div>
             <h2 className="text-3xl font-bold text-gray-900 text-center">
-              ทดสอบอัดเสียง
+              เชื่อมต่อ ESP32
             </h2>
           </div>
 
-          <p className="text-gray-600 mb-10 text-center text-lg px-4">
-            คุณสามารถสร้าง room ทดสอบสำหรับอัดเสียงด้วย ESP32 ได้ทันที
-          </p>
+          {/* Active rooms */}
+          <div className="mb-8">
+            <p className="text-gray-700 font-semibold mb-3 text-base">
+              🗂 เลือกห้องประชุมที่กำลังดำเนินอยู่
+            </p>
+            {isLoadingRooms ? (
+              <p className="text-gray-400 text-sm text-center py-4">
+                กำลังโหลด...
+              </p>
+            ) : activeRooms.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                {activeRooms.map((room) => (
+                  <button
+                    key={room.id}
+                    onClick={() => selectRoom(room)}
+                    className="w-full text-left px-5 py-4 rounded-2xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                  >
+                    <div className="font-semibold text-indigo-800 text-sm">
+                      {MEETING_TYPE_LABELS[room.meetingType] ??
+                        room.meetingType}
+                    </div>
+                    <div className="text-xs text-indigo-600 mt-0.5 font-mono truncate">
+                      📍 {room.location} ·{" "}
+                      {new Date(room.startedAt).toLocaleTimeString("th-TH", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}{" "}
+                      น.
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-400 text-sm text-center py-3 border border-dashed border-gray-200 rounded-xl">
+                ไม่มีห้องประชุมที่กำลังดำเนินอยู่
+              </p>
+            )}
+          </div>
+
+          <div className="relative flex items-center gap-3 mb-8">
+            <div className="flex-1 border-t border-gray-200" />
+            <span className="text-gray-400 text-sm">หรือ</span>
+            <div className="flex-1 border-t border-gray-200" />
+          </div>
 
           <button
             onClick={createTestRoom}
@@ -214,8 +297,8 @@ function RoomMonitorContent() {
             className={`w-full px-8 py-4 ${
               isCreatingRoom
                 ? "bg-gray-100 text-gray-500 cursor-not-allowed"
-                : "bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg"
-            } font-semibold rounded-2xl transition-all flex items-center justify-center gap-3 text-lg`}
+                : "bg-gray-800 hover:bg-gray-900 text-white shadow-md hover:shadow-lg"
+            } font-semibold rounded-2xl transition-all flex items-center justify-center gap-3 text-base`}
           >
             {isCreatingRoom ? (
               <>
@@ -225,25 +308,16 @@ function RoomMonitorContent() {
             ) : (
               <>
                 <span className="text-xl">🚀</span>
-                <span>สร้าง Room สำหรับทดสอบ</span>
+                <span>สร้าง Room ทดสอบใหม่</span>
               </>
             )}
           </button>
 
-          <div className="mt-10 p-6 bg-blue-50/50 border border-blue-100 rounded-2xl">
-            <p className="text-blue-800 font-medium mb-3 flex items-center gap-2">
-              <span className="text-lg">💡</span> หรือใช้ URL พร้อม parameters:
-            </p>
-            <code className="text-blue-600 text-sm break-all block bg-white p-4 rounded-xl border border-blue-100 shadow-sm font-mono">
-              /connect?roomId=xxx&accessToken=xxx
-            </code>
-          </div>
-
           <Link
-            href="/"
-            className="block text-center mt-8 px-6 py-3 text-gray-500 hover:text-gray-900 hover:bg-gray-50 rounded-xl transition-colors font-medium text-lg"
+            href="/dashboard"
+            className="block text-center mt-6 px-6 py-3 text-gray-500 hover:text-gray-900 hover:bg-gray-50 rounded-xl transition-colors font-medium"
           >
-            กลับหน้าหลัก
+            ไปหน้า Dashboard
           </Link>
         </div>
       </div>

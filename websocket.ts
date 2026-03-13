@@ -40,6 +40,11 @@ type StopRecordingMessage = {
   targetDeviceId: string;
 };
 
+type GoPendingMessage = {
+  type: "go-pending";
+  targetDeviceId: string;
+};
+
 type ESP32AudioChunkMessage = {
   type: "esp32-audio-chunk";
   roomId: string;
@@ -68,6 +73,7 @@ type WebSocketMessage =
   | TranscribedAnalysisMessage
   | StartRecordingMessage
   | StopRecordingMessage
+  | GoPendingMessage
   | ESP32AudioChunkMessage
   | TestAlertMessage
   | StartStreamMessage
@@ -119,6 +125,7 @@ declare global {
   var __wss: WebSocketServer | undefined;
   var __transcriptionQueues: Map<string, RoomTranscriptionQueue> | undefined;
   var __pendingESP32: Map<string, PendingESP32> | undefined;
+  var __pendingAutoStart: Map<string, { roomId: string }> | undefined;
 }
 
 const wsClients =
@@ -132,6 +139,11 @@ globalThis.__transcriptionQueues = transcriptionQueues;
 const pendingESP32 =
   globalThis.__pendingESP32 ?? new Map<string, PendingESP32>();
 globalThis.__pendingESP32 = pendingESP32;
+
+// Stores deviceId → roomId for start-recording requests that arrived before ESP32 reconnected
+const pendingAutoStart =
+  globalThis.__pendingAutoStart ?? new Map<string, { roomId: string }>();
+globalThis.__pendingAutoStart = pendingAutoStart;
 
 const BUFFER_SIZE = 3;
 const COOLDOWN_MS = 60_000;
@@ -223,10 +235,10 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
       const targetDeviceId = url.searchParams.get("targetDeviceId");
 
       if (targetDeviceId) {
-        const esp32 = pendingESP32.get(targetDeviceId);
-        if (esp32) {
-          // ส่ง roomId + accessToken ไปที่ ESP32
-          esp32.ws.send(
+        // Check pending ESP32 first
+        const esp32Pending = pendingESP32.get(targetDeviceId);
+        if (esp32Pending) {
+          esp32Pending.ws.send(
             JSON.stringify({
               type: "room-config",
               roomId,
@@ -235,7 +247,38 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
             }),
           );
           pendingESP32.delete(targetDeviceId);
-          console.log(`✅ Config sent to ESP32: ${targetDeviceId}`);
+          console.log(`✅ Config sent to pending ESP32: ${targetDeviceId}`);
+        } else {
+          // ESP32 already connected to some room — find it and reconfigure
+          let reconfigured = false;
+          for (const [, clientSet] of wsClients) {
+            for (const client of clientSet) {
+              if (
+                client.deviceId === targetDeviceId &&
+                client.clientType === "esp32"
+              ) {
+                client.ws.send(
+                  JSON.stringify({
+                    type: "room-config",
+                    roomId,
+                    accessToken,
+                    wsHost: req.headers.host,
+                  }),
+                );
+                reconfigured = true;
+                console.log(
+                  `✅ Reconfigured connected ESP32: ${targetDeviceId} → room ${roomId}`,
+                );
+                break;
+              }
+            }
+            if (reconfigured) break;
+          }
+          if (!reconfigured) {
+            console.log(
+              `⚠️ ESP32 ${targetDeviceId} not found (pending or connected)`,
+            );
+          }
         }
         // Close browser connection หลังส่ง config เสร็จ
         ws.close(1000, "Config sent");
@@ -260,6 +303,24 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
       deviceId: deviceId || undefined,
       clientType: clientType || undefined,
     };
+
+    // If this is an ESP32 reconnecting with a new room, remove it from any previous room
+    if (clientType === "esp32" && deviceId) {
+      for (const [otherRoomId, clientSet] of wsClients) {
+        if (otherRoomId === roomId) continue;
+        for (const c of clientSet) {
+          if (c.deviceId === deviceId && c.clientType === "esp32") {
+            if (c.endSttStream) c.endSttStream();
+            clientSet.delete(c);
+            console.log(
+              `🔄 Removed ESP32 ${deviceId} from old room ${otherRoomId}`,
+            );
+            break;
+          }
+        }
+      }
+    }
+
     const set = wsClients.get(roomId) ?? new Set<WebSocketClient>();
     set.add(client);
     wsClients.set(roomId, set);
@@ -267,6 +328,30 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     // Per-connection streaming STT session (for dashboard auto-recording)
     let connSttStream: ReturnType<typeof createGoogleSTTStream> | null = null;
     let isConnRecording = false;
+    let connSilenceTimer: ReturnType<typeof setTimeout> | null = null;
+    // True while gracefully ending the stream due to silence (not a 5-min limit restart)
+    let connEndingFromSilence = false;
+
+    // Called after every ESP32 audio chunk to detect end-of-clip silence.
+    // If no audio arrives within SILENCE_TIMEOUT_MS, the stream is ended gracefully
+    // so Google can return the final transcript.  The next incoming audio chunk will
+    // create a fresh stream — avoiding the "Audio Timeout Error".
+    const CONN_SILENCE_TIMEOUT_MS = 1500;
+    const resetConnSilenceTimer = () => {
+      if (connSilenceTimer) clearTimeout(connSilenceTimer);
+      connEndingFromSilence = false;
+      connSilenceTimer = setTimeout(() => {
+        connSilenceTimer = null;
+        if (connSttStream) {
+          console.log(
+            `🔚 Room ${roomId}: silence detected, ending STT stream gracefully`,
+          );
+          connEndingFromSilence = true;
+          connSttStream.end();
+          connSttStream = null;
+        }
+      }, CONN_SILENCE_TIMEOUT_MS);
+    };
 
     const startConnSttStream = () => {
       connSttStream = createGoogleSTTStream();
@@ -335,21 +420,29 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
       connSttStream.events.on("error", (err: Error) => {
         console.error("❌ Room conn STT error:", err.message);
         connSttStream = null;
-        if (isConnRecording) {
-          setTimeout(() => {
-            if (isConnRecording) startConnSttStream();
-          }, 500);
-        }
+        // Do NOT auto-restart immediately — an empty stream would trigger the same
+        // timeout right away.  The next incoming audio-data / esp32-audio-chunk
+        // message will call startConnSttStream() when it needs a stream.
       });
 
       connSttStream.events.on("end", () => {
         connSttStream = null;
-        if (isConnRecording) startConnSttStream(); // auto-restart on 5-min limit
+        if (isConnRecording && !connEndingFromSilence) {
+          // Stream hit the 5-minute session limit during continuous dashboard
+          // recording — restart immediately so audio-data messages keep working.
+          startConnSttStream();
+        }
+        connEndingFromSilence = false;
       });
     };
 
     const endConnSttStream = () => {
       isConnRecording = false;
+      if (connSilenceTimer) {
+        clearTimeout(connSilenceTimer);
+        connSilenceTimer = null;
+      }
+      connEndingFromSilence = false;
       if (connSttStream) {
         connSttStream.end();
         connSttStream = null;
@@ -365,6 +458,22 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
         timestamp: new Date().toISOString(),
       }),
     );
+
+    // If there was a pending start-recording for this ESP32 (sent before it reconnected)
+    // deliver it now that the connection is established.
+    if (clientType === "esp32" && deviceId) {
+      const autoStart = pendingAutoStart.get(deviceId);
+      if (autoStart && autoStart.roomId === roomId) {
+        pendingAutoStart.delete(deviceId);
+        ws.send(JSON.stringify({ type: "start-recording", roomId }));
+        console.log(
+          `🎙️ Auto-delivered queued start-recording to ESP32: ${deviceId}`,
+        );
+        // Notify dashboard that ESP32 recording has started
+        broadcastToRoom(roomId, { type: "esp32-started-recording", deviceId });
+      }
+    }
+
     console.log(
       `✅ WebSocket connected to room: ${roomId}, total: ${set.size}`,
     );
@@ -380,9 +489,16 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
             message as TranscribedAnalysisMessage,
           );
         } else if (message.type === "start-recording") {
-          handleStartRecording(message as StartRecordingMessage, roomId);
+          handleStartRecording(
+            message as StartRecordingMessage,
+            roomId,
+            accessToken,
+            (req.headers.host as string) || "",
+          );
         } else if (message.type === "stop-recording") {
           handleStopRecording(message as StopRecordingMessage, roomId);
+        } else if (message.type === "go-pending") {
+          handleGoPending(message as GoPendingMessage, roomId);
         } else if (message.type === "esp32-audio-chunk") {
           handleESP32AudioChunk(message as ESP32AudioChunkMessage);
 
@@ -392,6 +508,13 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
             console.log(`🎤 Room ${roomId}: auto-starting STT for ESP32 audio`);
             isConnRecording = true;
             startConnSttStream();
+          } else if (!connSttStream) {
+            // Stream was gracefully ended (silence timeout or error) — restart
+            // now that new audio has arrived.
+            console.log(
+              `🔄 Room ${roomId}: restarting STT stream for new audio clip`,
+            );
+            startConnSttStream();
           }
           if (connSttStream) {
             const pcmBuffer = Buffer.from(
@@ -399,6 +522,9 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
               "base64",
             );
             connSttStream.write(pcmBuffer);
+            // Reset silence timer so the stream stays open while audio is flowing
+            // and closes ~1.5 s after the last chunk of this recording clip.
+            resetConnSilenceTimer();
           }
         } else if (message.type === "start-stream") {
           endConnSttStream();
@@ -480,6 +606,18 @@ export function getPendingESP32List() {
   return Array.from(pendingESP32.values()).map((e) => ({
     deviceId: e.deviceId,
   }));
+}
+
+export function getConnectedESP32List() {
+  const result: { deviceId: string; roomId: string }[] = [];
+  for (const [roomId, clientSet] of wsClients) {
+    for (const client of clientSet) {
+      if (client.clientType === "esp32" && client.deviceId) {
+        result.push({ deviceId: client.deviceId, roomId });
+      }
+    }
+  }
+  return result;
 }
 
 /**
@@ -1021,15 +1159,77 @@ export function emitLegalEventWebSocket(
 }
 
 /**
+ * Handle go-pending command from browser - tell ESP32 to disconnect and return to pending mode
+ */
+function handleGoPending(message: GoPendingMessage, roomId: string) {
+  const { targetDeviceId } = message;
+
+  const set = wsClients.get(roomId);
+  if (!set) return;
+
+  let esp32Client: WebSocketClient | undefined;
+  for (const client of set) {
+    if (client.deviceId === targetDeviceId && client.clientType === "esp32") {
+      esp32Client = client;
+      break;
+    }
+  }
+
+  if (!esp32Client) {
+    console.log(`⚠️ ESP32 ${targetDeviceId} not found for go-pending`);
+    return;
+  }
+
+  try {
+    // Stop STT stream first
+    if (esp32Client.endSttStream) esp32Client.endSttStream();
+    // Tell ESP32 to go back to pending mode (reconnect without roomId)
+    esp32Client.ws.send(JSON.stringify({ type: "go-pending" }));
+    console.log(`🔄 Sent go-pending to ESP32: ${targetDeviceId}`);
+  } catch (error) {
+    console.error(`❌ Failed to send go-pending to ESP32:`, error);
+  }
+}
+
+/**
  * Handle start recording command from browser - relay to ESP32
  */
-function handleStartRecording(message: StartRecordingMessage, roomId: string) {
+function handleStartRecording(
+  message: StartRecordingMessage,
+  roomId: string,
+  accessToken: string,
+  wsHost: string,
+) {
   const { targetDeviceId } = message;
+
+  // If ESP32 is in pending mode (e.g., after go-pending triggered by room switch),
+  // send room-config proactively so it can reconnect to this room.
+  const pendingDevice = pendingESP32.get(targetDeviceId);
+  if (pendingDevice) {
+    try {
+      pendingDevice.ws.send(
+        JSON.stringify({ type: "room-config", roomId, accessToken, wsHost }),
+      );
+      pendingESP32.delete(targetDeviceId);
+      console.log(
+        `📡 Sent room-config to pending ESP32 ${targetDeviceId} (triggered by start-recording)`,
+      );
+    } catch (err) {
+      console.error(`❌ Failed to send room-config to pending ESP32:`, err);
+    }
+    // Queue start-recording for delivery once ESP32 reconnects with the new roomId
+    pendingAutoStart.set(targetDeviceId, { roomId });
+    return;
+  }
 
   // Find ESP32 client in the room
   const set = wsClients.get(roomId);
   if (!set) {
-    console.log(`⚠️ No clients found in room: ${roomId}`);
+    // Room has no clients yet — queue for when ESP32 connects
+    pendingAutoStart.set(targetDeviceId, { roomId });
+    console.log(
+      `⏳ No clients in room ${roomId} yet, queued start-recording for ESP32 ${targetDeviceId}`,
+    );
     return;
   }
 
@@ -1042,7 +1242,11 @@ function handleStartRecording(message: StartRecordingMessage, roomId: string) {
   }
 
   if (!esp32Client) {
-    console.log(`⚠️ ESP32 ${targetDeviceId} not found in room ${roomId}`);
+    // ESP32 not in room yet — queue the command so it's delivered when it reconnects
+    pendingAutoStart.set(targetDeviceId, { roomId });
+    console.log(
+      `⏳ ESP32 ${targetDeviceId} not in room yet, queued start-recording for room ${roomId}`,
+    );
     return;
   }
 
