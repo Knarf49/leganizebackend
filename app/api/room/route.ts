@@ -42,14 +42,16 @@ export async function POST(req: Request) {
       try {
         console.log(`📄 Processing AOA file: ${aoaFile.name}`);
         const buffer = Buffer.from(await aoaFile.arrayBuffer());
-        // pdf-parse is CommonJS, use require
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const pdf = require("pdf-parse");
-        const data = await pdf(buffer);
-        aoaContent = data.text;
+        const { extractText, getDocumentProxy } = await import("unpdf");
+        const pdf = await getDocumentProxy(new Uint8Array(buffer));
+        const { text, totalPages } = await extractText(pdf, {
+          mergePages: true,
+        });
+        aoaContent = text;
         console.log(
-          `✅ Extracted ${data.numpages} pages, ${aoaContent.length} characters`,
+          `✅ Extracted ${totalPages} pages, ${aoaContent.length} characters`,
         );
+        console.log("📄 AOA Content:\n", aoaContent);
       } catch (pdfError) {
         console.error("❌ Failed to parse AOA PDF:", pdfError);
         // Continue without AOA content

@@ -1135,6 +1135,66 @@ input {
 }
 
 /* ========================================
+   AOA LOADING OVERLAY
+   ======================================== */
+
+.create-form-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.create-form-loading-box {
+  background: var(--color-surface);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-xl);
+  padding: var(--space-10) var(--space-12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 220px;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.create-form-spinner {
+  width: 48px;
+  height: 48px;
+  animation: spin 0.9s linear infinite;
+  color: var(--color-primary);
+}
+
+.create-form-spinner-track {
+  opacity: 0.2;
+}
+
+.create-form-spinner-arc {
+  opacity: 0.9;
+}
+
+.create-form-loading-text {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.create-form-loading-sub {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+/* ========================================
    CALENDAR VIEW
    ======================================== */
 

@@ -28,7 +28,7 @@ export async function runRiskAnalyzer({
         messages: [
           {
             role: "user",
-            content: `กรุณาวิเคราะห์ความเสี่ยงทางกฎหมายจากการประชุมนี้: ${combinedTranscript}`,
+            content: combinedTranscript,
           },
         ],
       },
