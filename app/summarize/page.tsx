@@ -5,7 +5,7 @@ import Link from "next/link";
 import MeetingSummaryCard from "@/components/MeetingSummaryCard";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-
+//TODO: finish this page
 type Room = {
   id: string;
   meetingType: "AGM" | "EGM" | "BOD";

@@ -336,7 +336,7 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
     // If no audio arrives within SILENCE_TIMEOUT_MS, the stream is ended gracefully
     // so Google can return the final transcript.  The next incoming audio chunk will
     // create a fresh stream — avoiding the "Audio Timeout Error".
-    const CONN_SILENCE_TIMEOUT_MS = 1500;
+    const CONN_SILENCE_TIMEOUT_MS = 800;
     const resetConnSilenceTimer = () => {
       if (connSilenceTimer) clearTimeout(connSilenceTimer);
       connEndingFromSilence = false;
@@ -401,15 +401,10 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
           try {
             const room = await prisma.room.findFirst({
               where: { id: roomId, accessToken },
-              select: { companyType: true, threadId: true },
+              select: { companyType: true },
             });
             if (room) {
-              await processTranscriptAnalysis(
-                roomId,
-                text,
-                room.companyType,
-                room.threadId,
-              );
+              await processTranscriptAnalysis(roomId, text, room.companyType);
             }
           } catch (e) {
             console.error("❌ Failed to run transcript analysis:", e);
@@ -696,7 +691,6 @@ async function processSingleTranscription(
       },
       select: {
         id: true,
-        threadId: true,
         companyType: true,
       },
     });
@@ -779,12 +773,7 @@ async function processSingleTranscription(
        3️⃣ Continue with existing analysis logic (don't save to DB yet)
     ======================== */
     // Continue with buffer management and risk analysis...
-    await processTranscriptAnalysis(
-      roomId,
-      text,
-      room.companyType,
-      room.threadId,
-    );
+    await processTranscriptAnalysis(roomId, text, room.companyType);
 
     // Return the transcribed text for potential saving later
     return text;
@@ -806,7 +795,6 @@ async function processTranscriptAnalysis(
   roomId: string,
   text: string,
   companyType: CompanyTypeInput,
-  threadId: string,
 ) {
   // Existing buffer management and risk analysis logic
   const bufferKey = `room:${roomId}:buffer`;
@@ -849,9 +837,9 @@ async function processTranscriptAnalysis(
      Risk Detector (เบา/เร็ว)
   ======================== */
   const buffer = await redis.lrange(bufferKey, 0, -1);
-  // console.log(
-  //   `🔍 Running risk detector: roomId=${roomId}, companyType=${companyType}`,
-  // );
+  console.log(
+    `🔍 Running risk detector: roomId=${roomId}, companyType=${companyType}`,
+  );
 
   broadcastToRoom(roomId, {
     type: "analyzing",
@@ -859,7 +847,7 @@ async function processTranscriptAnalysis(
   });
 
   const signal = await runRiskDetector(buffer, companyType);
-  // console.log(`📊 Risk detector result: ${signal}`);
+  console.log(`📊 Risk detector result: ${signal}`);
 
   if (!signal) {
     // console.log(`✅ No risk detected`);
@@ -875,7 +863,7 @@ async function processTranscriptAnalysis(
   /* ========================
      Risk Analyzer (หนัก)
   ======================== */
-  // console.log(`🧠 Running risk analyzer for room: ${roomId}`);
+  console.log(`🧠 Running risk analyzer for room: ${roomId}`);
 
   broadcastToRoom(roomId, {
     type: "deep-analyzing",
@@ -885,10 +873,9 @@ async function processTranscriptAnalysis(
   const analyzerResult = await runRiskAnalyzer({
     roomId,
     transcript: buffer,
-    threadId: threadId,
   });
 
-  // console.log(`📋 Analyzer result:`, analyzerResult);
+  console.log(`📋 Analyzer result:`, analyzerResult);
 
   if (
     analyzerResult &&
@@ -1076,7 +1063,6 @@ async function handleTranscribedAnalysisMessage(
       },
       select: {
         id: true,
-        threadId: true,
         companyType: true,
       },
     });
@@ -1103,12 +1089,7 @@ async function handleTranscribedAnalysisMessage(
     /* ========================
        3️⃣ Continue with transcript analysis
     ======================== */
-    await processTranscriptAnalysis(
-      roomId,
-      text,
-      room.companyType,
-      room.threadId,
-    );
+    await processTranscriptAnalysis(roomId, text, room.companyType);
   } catch (error) {
     // console.error(`❌ Error processing transcribed text:`, error);
     broadcastToRoom(roomId, {
