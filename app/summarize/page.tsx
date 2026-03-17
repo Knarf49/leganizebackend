@@ -15,7 +15,7 @@ type Room = {
   meetingType: "AGM" | "EGM" | "BOD";
   calledBy: string;
   location: string;
-  no: string;
+  meetingNo: string;
   agendas: string[];
   startedAt: string;
   endedAt: string | null;
