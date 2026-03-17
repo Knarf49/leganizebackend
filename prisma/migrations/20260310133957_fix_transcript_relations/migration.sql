@@ -1,11 +1,16 @@
--- CreateIndex
-CREATE INDEX "AnalysisLog_roomId_idx" ON "AnalysisLog"("roomId");
+-- Delete orphaned rows that would violate FK constraints
+DELETE FROM "TranscriptChunk" WHERE "roomId" NOT IN (SELECT "id" FROM "Room");
+DELETE FROM "LegalRisk" WHERE "roomId" NOT IN (SELECT "id" FROM "Room");
+DELETE FROM "AnalysisLog" WHERE "roomId" NOT IN (SELECT "id" FROM "Room");
 
 -- CreateIndex
-CREATE INDEX "LegalRisk_roomId_idx" ON "LegalRisk"("roomId");
+CREATE INDEX IF NOT EXISTS "AnalysisLog_roomId_idx" ON "AnalysisLog"("roomId");
 
 -- CreateIndex
-CREATE INDEX "TranscriptChunk_roomId_idx" ON "TranscriptChunk"("roomId");
+CREATE INDEX IF NOT EXISTS "LegalRisk_roomId_idx" ON "LegalRisk"("roomId");
+
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "TranscriptChunk_roomId_idx" ON "TranscriptChunk"("roomId");
 
 -- AddForeignKey
 ALTER TABLE "TranscriptChunk" ADD CONSTRAINT "TranscriptChunk_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "Room"("id") ON DELETE CASCADE ON UPDATE CASCADE;
