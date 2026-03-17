@@ -253,7 +253,6 @@ export async function POST(
     const analyzerResult = await runRiskAnalyzer({
       roomId: id,
       transcript: buffer,
-      threadId: room.threadId,
     });
     console.log(`📋 Analyzer result:`, analyzerResult);
 
