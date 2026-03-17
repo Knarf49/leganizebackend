@@ -398,13 +398,17 @@ export function initializeWebSocketServer(httpServer: HTTPServer) {
           });
 
           // Run risk analysis
+          console.log(`🔎 [STT-stream] final transcript roomId=${roomId}, text="${text.substring(0, 80)}${text.length > 80 ? "..." : ""}"`);
           try {
             const room = await prisma.room.findFirst({
               where: { id: roomId, accessToken },
               select: { companyType: true },
             });
             if (room) {
+              console.log(`🏢 [STT-stream] room found, companyType=${room.companyType} → calling processTranscriptAnalysis`);
               await processTranscriptAnalysis(roomId, text, room.companyType);
+            } else {
+              console.error(`❌ [STT-stream] room not found: roomId=${roomId}`);
             }
           } catch (e) {
             console.error("❌ Failed to run transcript analysis:", e);
