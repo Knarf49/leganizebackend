@@ -14,23 +14,26 @@ export default function AskPage() {
     setResponse(null);
 
     try {
-      const res = await fetch(`${process.env.LANGGRAPH_URL}/runs/wait`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          assistant_id: "b12faf45-1d31-5322-bb04-0c6c49ace86b",
-          input: {
-            messages: [
-              {
-                role: "user",
-                content: message,
-              },
-            ],
+      const res = await fetch(
+        "https://leganize-production.up.railway.app/runs/wait",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
-        }),
-      });
+          body: JSON.stringify({
+            assistant_id: "b12faf45-1d31-5322-bb04-0c6c49ace86b",
+            input: {
+              messages: [
+                {
+                  role: "user",
+                  content: message,
+                },
+              ],
+            },
+          }),
+        },
+      );
 
       if (!res.ok) {
         throw new Error(`Request failed: ${res.status}`);
