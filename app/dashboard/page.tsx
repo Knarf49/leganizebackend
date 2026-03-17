@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type Room = {
   id: string;
   meetingType: "AGM" | "EGM" | "BOD";
+  meetingNo: string;
   calledBy: string;
   location: string;
   agendas: string[];
@@ -51,7 +52,7 @@ function roomToCard(room: Room) {
     title: MEETING_TYPE_LABELS[room.meetingType] ?? room.meetingType,
     company: COMPANY_TYPE_LABELS[room.companyType] ?? room.companyType,
     type: MEETING_TYPE_LABELS[room.meetingType] ?? room.meetingType,
-    no: "-",
+    no: room.meetingNo,
     date,
     time: `${startTime} น. - ${endTime} น.`,
     location: room.location,

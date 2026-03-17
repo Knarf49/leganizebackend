@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     const agendasRaw = formData.get("agendas") as string | null;
     const startedAt = formData.get("startedAt") as string | null;
     const aoaFile = formData.get("aoaFile") as File | null;
-
+    const meetingNo = formData.get("meetingNo") as string | null;
     const agendas = agendasRaw ? JSON.parse(agendasRaw) : [];
 
     if (!companyType) {
@@ -128,6 +128,7 @@ export async function POST(req: Request) {
         accessToken,
         status: "ACTIVE",
         companyType: enumValue,
+        meetingNo: meetingNo || "1/2569",
         meetingType: meetingTypeValue as "AGM" | "EGM" | "BOD",
         calledBy: calledBy || "System",
         location: location || "Not specified",
@@ -261,6 +262,18 @@ export async function GET(req: Request) {
       orderBy: { createdAt: "desc" },
       take: limit,
       skip,
+      select: {
+        id: true,
+        meetingType: true,
+        calledBy: true,
+        location: true,
+        agendas: true,
+        startedAt: true,
+        endedAt: true,
+        status: true,
+        companyType: true,
+        meetingNo: true,
+      },
     });
 
     return NextResponse.json(

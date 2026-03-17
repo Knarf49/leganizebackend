@@ -46,6 +46,8 @@ model Room {
   // Audit
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  meetingNo String @default("1/2569")
 }
 
 enum RoomStatus {

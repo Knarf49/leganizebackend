@@ -15,6 +15,7 @@ type Room = {
   meetingType: "AGM" | "EGM" | "BOD";
   calledBy: string;
   location: string;
+  no: string;
   agendas: string[];
   startedAt: string;
   endedAt: string | null;
@@ -60,7 +61,7 @@ function roomToMeeting(room: Room) {
       room.meetingType,
     company: room.calledBy,
     type: MEETING_TYPE_LABELS[room.meetingType] ?? room.meetingType,
-    no: "-",
+    no: room.meetingNo, // Use meetingNo from API response
     date,
     time: `${startTime} น. - ${endTime} น.`,
     location: room.location,
@@ -100,6 +101,9 @@ function MeetingDetailView({
   riskLevels: string[];
   legalRisks: LegalRisk[];
 }) {
+  if (meeting) {
+    console.log("Meeting No:", meeting.no);
+  }
   const [isOpen, setIsOpen] = useState(false);
   if (!meeting) {
     return <div className="text-gray-400 p-6">กำลังโหลดการประชุม...</div>;
@@ -372,7 +376,11 @@ export default function SummaryPage() {
               className="mb-2 cursor-pointer"
               onClick={() => setSelectedMeeting(item)}
             >
-              <MeetingSummaryCard meeting={item} index={index} riskLevels={item.riskLevels} />
+              <MeetingSummaryCard
+                meeting={item}
+                index={index}
+                riskLevels={item.riskLevels}
+              />
             </div>
           ))}
         </div>
