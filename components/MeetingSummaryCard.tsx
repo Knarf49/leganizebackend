@@ -2,6 +2,7 @@
 
 import { User } from "lucide-react";
 import { motion } from "framer-motion";
+import { getRiskBarColors } from "@/lib/utils";
 
 interface MeetingSummaryData {
   title: string;
@@ -12,23 +13,20 @@ interface MeetingSummaryData {
   time: string;
   location: string;
   tags: string[];
+  riskLevels: string[];
 }
 
 interface MeetingSummaryCardProps {
   meeting: MeetingSummaryData;
   index: number;
+  riskLevels: string[];
 }
 
 export default function MeetingSummaryCard({
   meeting,
   index,
 }: MeetingSummaryCardProps) {
-  const tagColors: Record<string, string> = {
-    red: "#ef4444",
-    yellow: "#eab308",
-    green: "#22c55e",
-    blue: "#3b82f6",
-  };
+  const tagColors = getRiskBarColors(meeting.riskLevels);
 
   return (
     <motion.div
@@ -39,11 +37,11 @@ export default function MeetingSummaryCard({
     >
       {/* Color tag bars at top */}
       <div className="summary-card-tags">
-        {meeting.tags.map((tag, i) => (
+        {tagColors.map((color, i) => (
           <div
             key={i}
             className="summary-card-tag"
-            style={{ backgroundColor: tagColors[tag] || tag }}
+            style={{ backgroundColor: color }}
           />
         ))}
       </div>

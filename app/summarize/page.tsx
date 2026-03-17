@@ -1,13 +1,15 @@
 "use client";
 
-import { ChevronLeft, Share2 } from "lucide-react";
+import { ChevronLeft, Share2, ChevronDown } from "lucide-react";
 import Link from "next/link";
 import MeetingSummaryCard from "@/components/MeetingSummaryCard";
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState, useTransition } from "react";
 import Markdown from "react-markdown";
+import { AnimatePresence } from "framer-motion";
+import { cn, getRiskBarColors } from "@/lib/utils";
 
-//TODO: เพิ่มให้ fetch การแจ้งเตือนตาม roomId
+//TODO: เพิ่ม alert ตอนกด จบการประชุม
 type Room = {
   id: string;
   meetingType: "AGM" | "EGM" | "BOD";
@@ -63,13 +65,9 @@ function roomToMeeting(room: Room) {
     time: `${startTime} น. - ${endTime} น.`,
     location: room.location,
     tags: STATUS_TAGS[room.status] ?? ["blue"],
+    riskLevels: [] as string[],
   };
 }
-// const meetingItems = [
-//   { title: "พิจารณารับรองรายงานการประชุมผู้ถือหุ้นครั้งก่อน", company: "ABC จำกัด", type: "การประชุมสามัญประจำปี", no: "1/2569", date: "24 มกราคม 2569", time: "14:00 น. - 16:00 น.", location: "ห้องประชุม 2", tags: ["red", "yellow"] },
-//   { title: "พิจารณาเลือกตั้งกรรมการแทนกรรมการที่ครบวาระ", company: "ABC จำกัด", type: "การประชุมสามัญประจำปี", no: "1/2569", date: "24 กุมภาพันธ์ 2569", time: "12:00 น. - 13:00 น.", location: "ห้องประชุม 5 และสื่ออิเล็กทรอนิกส์", tags: ["yellow", "green"] },
-//   { title: "พิจารณากำหนดค่าตอบแทนคณะกรรมการบริษัท ประจำปี 2569", company: "ABC จำกัด", type: "การประชุมคณะกรรมการ", no: "2/2569", date: "25 มกราคม 2569", time: "13:30 น. - 16:30 น.", location: "ณ ห้องประชุมบอร์ดรูม", tags: ["red", "blue"] },
-// ];
 
 type Meeting = ReturnType<typeof roomToMeeting>;
 
@@ -80,31 +78,142 @@ const TAG_COLORS: Record<string, string> = {
   blue: "#3b82f6",
 };
 
+type LegalRisk = {
+  id: string;
+  riskLevel: string;
+  issueDescription: string;
+  legalBasisType: string;
+  legalBasisReference: string;
+  legalReasoning: string;
+  recommendation: string;
+  urgencyLevel: string;
+};
+
 function MeetingDetailView({
   meeting,
   legalRiskCount,
+  riskLevels,
+  legalRisks,
 }: {
   meeting: Meeting | undefined;
   legalRiskCount: number | null;
+  riskLevels: string[];
+  legalRisks: LegalRisk[];
 }) {
+  const [isOpen, setIsOpen] = useState(false);
   if (!meeting) {
     return <div className="text-gray-400 p-6">กำลังโหลดการประชุม...</div>;
   }
+  const RISK_COLORS: Record<
+    string,
+    { bg: string; text: string; border: string }
+  > = {
+    สูง: { bg: "bg-red-50", text: "text-red-600", border: "border-red-200" },
+    กลาง: {
+      bg: "bg-yellow-50",
+      text: "text-yellow-600",
+      border: "border-yellow-200",
+    },
+    ต่ำ: {
+      bg: "bg-green-50",
+      text: "text-green-600",
+      border: "border-green-200",
+    },
+  };
   return (
     <div className="flex flex-col w-full h-150 overflow-y-auto pt-5 space-y-4">
       {/* Header: แจ้งเตือน */}
-      <div className="flex items-center gap-3 bg-white border border-gray-200 p-3 rounded-lg shadow-sm">
-        <div className="w-1 bg-red-500 self-stretch rounded-full" />
-        <div className="text-sm">
-          <p className="font-semibold text-gray-800">
-            {legalRiskCount === null
-              ? "กำลังโหลด..."
-              : `ทั้งหมด ${legalRiskCount} การแจ้งเตือน`}
-          </p>
-          <p className="text-gray-500 truncate">{meeting.title}</p>
-        </div>
-      </div>
+      <div
+        className={cn(
+          "bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex",
+          isOpen && "flex-col",
+        )}
+      >
+        {/* clickable header */}
+        {!isOpen && (
+          <div className="flex self-stretch">
+            {getRiskBarColors(riskLevels).map((color, i) => (
+              <div
+                key={i}
+                className="w-3 flex-1 min-h-2"
+                style={{ backgroundColor: color }}
+              />
+            ))}
+          </div>
+        )}
+        <button
+          className="w-full flex items-center gap-3 p-3 hover:bg-gray-50 transition-colors text-left"
+          onClick={() => setIsOpen((prev) => !prev)}
+        >
+          <div className="text-sm flex-1">
+            <p className="font-semibold text-gray-800">
+              {legalRiskCount === null
+                ? "กำลังโหลด..."
+                : `ทั้งหมด ${legalRiskCount} การแจ้งเตือน`}
+            </p>
+            <p className="text-gray-500 truncate">{meeting.title}</p>
+          </div>
+          <motion.div
+            animate={{ rotate: isOpen ? 180 : 0 }}
+            transition={{ duration: 0.2 }}
+            className="text-gray-400 shrink-0"
+          >
+            <ChevronDown size={16} />
+          </motion.div>
+        </button>
 
+        {/* dropdown content */}
+        <AnimatePresence>
+          {isOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25, ease: "easeInOut" }}
+              className="overflow-hidden"
+            >
+              <div className="max-h-72 overflow-y-auto border-t border-gray-100 divide-y divide-gray-100">
+                {legalRisks.length === 0 ? (
+                  <p className="text-gray-400 text-sm p-4">ไม่มีการแจ้งเตือน</p>
+                ) : (
+                  legalRisks.map((risk) => {
+                    const level = risk.riskLevel.toLowerCase();
+                    const color = RISK_COLORS[level] ?? RISK_COLORS["low"];
+                    return (
+                      <div key={risk.id} className="p-4 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`text-xs font-medium px-2 py-0.5 rounded-full border ${color.bg} ${color.text} ${color.border}`}
+                          >
+                            {risk.riskLevel}
+                          </span>
+                          <span className="text-xs text-gray-400">
+                            {risk.urgencyLevel}
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium text-gray-800">
+                          {risk.issueDescription}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {risk.legalReasoning}
+                        </p>
+                        <div className="text-xs text-gray-400 bg-gray-50 rounded p-2 border border-gray-100">
+                          <span className="font-medium">อ้างอิง:</span>{" "}
+                          {risk.legalBasisReference}
+                        </div>
+                        <p className="text-xs text-blue-600 bg-blue-50 rounded p-2 border border-blue-100">
+                          <span className="font-medium">คำแนะนำ:</span>{" "}
+                          {risk.recommendation}
+                        </p>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
       {/* ข้อมูลการประชุมหลัก */}
       <div className="bg-white border border-gray-200 p-6 rounded-2xl shadow-sm">
         {/* ส่วนแสดงแท็กสี */}
@@ -160,14 +269,38 @@ export default function SummaryPage() {
   const [summaryLoading, startSummaryTransition] = useTransition();
   const markdownRef = useRef<HTMLDivElement>(null);
   const [legalRiskCount, setLegalRiskCount] = useState<number | null>(null);
+  const [legalRisks, setLegalRisks] = useState<LegalRisk[]>([]);
+  const [riskLevels, setRiskLevels] = useState<string[]>([]);
 
   useEffect(() => {
     fetch("/api/room?limit=5")
       .then((res) => res.json())
-      .then((data) => {
+      .then(async (data) => {
         const mapped = (data.rooms ?? []).map(roomToMeeting);
         setMeetings(mapped);
         if (mapped.length > 0) setSelectedMeeting(mapped[0]);
+
+        // fetch risk ของทุก room แล้ว update meetings
+        const riskResults = await Promise.all(
+          mapped.map((m: Meeting) =>
+            fetch(`/api/risk/${m.id}?limit=100&skip=0`)
+              .then((res) => (res.ok ? res.json() : null))
+              .then((data) => ({
+                id: m.id,
+                levels: (data?.data ?? []).map(
+                  (r: { riskLevel: string }) => r.riskLevel,
+                ) as string[],
+              }))
+              .catch(() => ({ id: m.id, levels: [] as string[] })),
+          ),
+        );
+
+        setMeetings((prev) =>
+          prev.map((m) => ({
+            ...m,
+            riskLevels: riskResults.find((r) => r.id === m.id)?.levels ?? [],
+          })),
+        );
       })
       .catch((err) => console.error("Failed to fetch rooms:", err));
   }, []);
@@ -175,24 +308,37 @@ export default function SummaryPage() {
   useEffect(() => {
     if (!selectedMeeting) return;
 
-    // reset ก่อน
+    // reset
     setSummary(null);
     setLegalRiskCount(null);
+    setRiskLevels([]);
+    setLegalRisks([]);
 
-    // ยิงพร้อมกันด้วย Promise.all
     startSummaryTransition(async () => {
       const [summaryRes, legalRes] = await Promise.all([
         fetch(`/api/room/${selectedMeeting.id}/summarize`),
-        fetch(`/api/risk/${selectedMeeting.id}?limit=1&skip=0`),
+        fetch(`/api/risk/${selectedMeeting.id}?limit=100&skip=0`),
       ]);
 
       const [summaryData, legalData] = await Promise.all([
-        summaryRes.json(),
-        legalRes.json(),
+        summaryRes.ok ? summaryRes.json() : null,
+        legalRes.ok ? legalRes.json() : null,
       ]);
 
-      setSummary(summaryData.room?.finalSummary ?? null);
-      setLegalRiskCount(legalData.meta?.total ?? 0);
+      console.log("legalData:", legalData);
+      console.log("risks:", legalData?.data);
+
+      setSummary(summaryData?.room?.finalSummary ?? null);
+      setLegalRiskCount(legalData?.meta?.total ?? 0);
+      const levels: string[] = (legalData?.data ?? []).map(
+        (r: { riskLevel: string }) => r.riskLevel,
+      );
+      setRiskLevels(levels);
+
+      const risks: LegalRisk[] = legalData?.data ?? [];
+      setLegalRisks(risks);
+      setLegalRiskCount(legalData?.meta?.total ?? 0);
+      setRiskLevels(risks.map((r) => r.riskLevel));
     });
   }, [selectedMeeting]);
 
@@ -226,7 +372,7 @@ export default function SummaryPage() {
               className="mb-2 cursor-pointer"
               onClick={() => setSelectedMeeting(item)}
             >
-              <MeetingSummaryCard meeting={item} index={index} />
+              <MeetingSummaryCard meeting={item} index={index} riskLevels={item.riskLevels} />
             </div>
           ))}
         </div>
@@ -238,6 +384,8 @@ export default function SummaryPage() {
             <MeetingDetailView
               meeting={selectedMeeting}
               legalRiskCount={legalRiskCount}
+              riskLevels={riskLevels}
+              legalRisks={legalRisks}
             />
           </div>
 
