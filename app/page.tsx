@@ -40,7 +40,7 @@ const MEETING_TYPE_COLORS: Record<string, string> = {
 
 export default function Home() {
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [totalRooms, setTotalRooms] = useState<number>(0);
+  const [totalRooms, setTotalRooms] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/room?limit=3&status=ACTIVE")
@@ -85,7 +85,9 @@ export default function Home() {
         <div className="dashboard-meetings-section">
           <div className="dashboard-meetings-header">
             <h2>การประชุมครั้งต่อไป</h2>
-            <span className="dashboard-meeting-count">{totalRooms} รายการ</span>
+            <span className="dashboard-meeting-count">
+              {totalRooms === null ? "กำลังโหลด..." : `${totalRooms} รายการ`}
+            </span>
           </div>
 
           <div className="dashboard-meetings-list">

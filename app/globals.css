@@ -66,8 +66,8 @@
 
 * {
   box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+  /* margin: 0; */
+  /* padding: 0; */
 }
 
 html {
@@ -84,14 +84,14 @@ body {
   line-height: 1.5;
 }
 
-button {
+/* button {
   cursor: pointer;
   border: none;
   background: none;
   font-family: inherit;
   font-size: inherit;
   color: inherit;
-}
+} */
 
 a {
   text-decoration: none;
@@ -1346,7 +1346,8 @@ input {
 
 .dashboard-meetings-header {
   display: flex;
-  justify-content: space-between;
+  /* justify-content: space-between; */
+  gap: var(--space-4);
   align-items: center;
   margin-bottom: var(--space-5);
 }
@@ -1414,9 +1415,9 @@ input {
    ======================================== */
 
 .summary-page {
-  max-width: 800px;
+  max-width: 1220px;
   margin: 0 auto;
-  padding: var(--space-4) var(--space-4) var(--space-12);
+  /* padding: var(--space-8) var(--space-8) var(--space-16); */
 }
 
 .summary-page-header {
@@ -1499,10 +1500,13 @@ input {
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--color-border-light);
   transition: box-shadow var(--duration-normal) var(--ease-out);
+  transition: .5s;
 }
 
 .summary-card-wrapper:hover .summary-card-body {
   box-shadow: var(--shadow-xl);
+  background: #f3f3f3;
+  transition: .5s;
 }
 
 .summary-card-header {
@@ -1537,8 +1541,9 @@ input {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-left: 60px;
+  padding-left: 50px;
 }
+
 
 .summary-card-row {
   display: grid;

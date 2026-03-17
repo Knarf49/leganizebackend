@@ -24,6 +24,7 @@
     "express": "^5.2.1",
     "framer-motion": "^12.35.0",
     "franc-min": "^6.2.0",
+    "html2pdf.js": "^0.14.0",
     "ioredis": "^5.9.2",
     "langchain": "^1.2.21",
     "langsmith": "^0.5.2",
