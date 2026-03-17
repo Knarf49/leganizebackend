@@ -14,7 +14,7 @@ export default function AskPage() {
     setResponse(null);
 
     try {
-      const res = await fetch("https://leganize.onrender.com/runs/wait", {
+      const res = await fetch(`${process.env.LANGGRAPH_URL}/runs/wait`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
