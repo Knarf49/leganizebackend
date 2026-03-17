@@ -145,7 +145,7 @@ const pendingAutoStart =
   globalThis.__pendingAutoStart ?? new Map<string, { roomId: string }>();
 globalThis.__pendingAutoStart = pendingAutoStart;
 
-const BUFFER_SIZE = 3;
+const BUFFER_SIZE = 1;
 const COOLDOWN_MS = 60_000;
 
 /**
@@ -812,6 +812,8 @@ async function processTranscriptAnalysis(
   // Existing buffer management and risk analysis logic
   const bufferKey = `room:${roomId}:buffer`;
   const cooldownKey = `room:${roomId}:cooldown`;
+  // Flag to prevent concurrent shallow analyses from overriding an in-progress deep analysis
+  const deepAnalyzingKey = `room:${roomId}:deep-analyzing`;
 
   const bufferPushLen = await redis.rpush(bufferKey, text);
   await redis.ltrim(bufferKey, -BUFFER_SIZE, -1);
@@ -856,10 +858,14 @@ async function processTranscriptAnalysis(
     `🔍 Running risk detector: roomId=${roomId}, companyType=${companyType}`,
   );
 
-  broadcastToRoom(roomId, {
-    type: "analyzing",
-    message: "Checking for legal risks...",
-  });
+  // Only show "analyzing" if a deep analysis isn't already in progress
+  const isDeepAnalyzingNow = await redis.get(deepAnalyzingKey);
+  if (!isDeepAnalyzingNow) {
+    broadcastToRoom(roomId, {
+      type: "analyzing",
+      message: "Checking for legal risks...",
+    });
+  }
 
   const signal = await runRiskDetector(buffer, companyType);
   console.log(`📊 Risk detector result: ${signal}`);
@@ -867,11 +873,15 @@ async function processTranscriptAnalysis(
   if (!signal) {
     // console.log(`✅ No risk detected`);
     await redis.del(bufferKey);
-    broadcastToRoom(roomId, {
-      type: "analysis-complete",
-      hasRisks: false,
-      message: "No legal risks detected",
-    });
+    // Don't override the "deep-analyzing" status if a deep analysis is still running
+    const stillDeepAnalyzing = await redis.get(deepAnalyzingKey);
+    if (!stillDeepAnalyzing) {
+      broadcastToRoom(roomId, {
+        type: "analysis-complete",
+        hasRisks: false,
+        message: "No legal risks detected",
+      });
+    }
     return;
   }
 
@@ -880,85 +890,93 @@ async function processTranscriptAnalysis(
   ======================== */
   console.log(`🧠 Running risk analyzer for room: ${roomId}`);
 
+  // Mark deep analysis as in-progress; TTL of 3 minutes as a safety net
+  await redis.set(deepAnalyzingKey, "1", "EX", 180);
+
   broadcastToRoom(roomId, {
     type: "deep-analyzing",
     message: "Performing deep legal analysis...",
   });
 
-  const analyzerResult = await runRiskAnalyzer({
-    roomId,
-    transcript: buffer,
-  });
+  try {
+    const analyzerResult = await runRiskAnalyzer({
+      roomId,
+      transcript: buffer,
+    });
 
-  console.log(`📋 Analyzer result:`, analyzerResult);
+    console.log(`📋 Analyzer result:`, analyzerResult);
 
-  if (
-    analyzerResult &&
-    typeof analyzerResult === "object" &&
-    "issues" in analyzerResult &&
-    Array.isArray((analyzerResult as { issues?: unknown[] }).issues) &&
-    (analyzerResult as { issues: unknown[] }).issues.length > 0
-  ) {
-    const allIssues = (analyzerResult as { issues: AnalyzerIssue[] }).issues;
+    if (
+      analyzerResult &&
+      typeof analyzerResult === "object" &&
+      "issues" in analyzerResult &&
+      Array.isArray((analyzerResult as { issues?: unknown[] }).issues) &&
+      (analyzerResult as { issues: unknown[] }).issues.length > 0
+    ) {
+      const allIssues = (analyzerResult as { issues: AnalyzerIssue[] }).issues;
 
-    // Filter out issues with "ไม่พบกฎหมายที่เกี่ยวข้อง"
-    const validIssues = allIssues.filter(
-      (issue) =>
-        issue.legalBasis?.type !==
-        "ไม่พบบทบัญญัติกฎหมายหรือหลักเกณฑ์ที่เกี่ยวข้องในเอกสารที่ค้นพบ",
-    );
-
-    if (validIssues.length > 0) {
-      console.log(`🚨 Found ${validIssues.length} valid legal issues`);
-
-      /* ========================
-         Save to database
-      ======================== */
-      await prisma.legalRisk.createMany({
-        data: validIssues.map((issue) => ({
-          roomId,
-          riskLevel: issue.riskLevel ?? "ไม่ระบุ",
-          issueDescription: issue.issueDescription ?? "",
-          legalBasisType: issue.legalBasis?.type ?? "ไม่ระบุ",
-          legalBasisReference: issue.legalBasis?.reference ?? "",
-          legalReasoning: issue.legalReasoning ?? "",
-          recommendation: issue.recommendation ?? "",
-          urgencyLevel: issue.urgencyLevel ?? "ไม่ระบุ",
-          rawJson: issue,
-        })),
-      });
-
-      /* ========================
-         Broadcast to client
-      ======================== */
-      broadcastToRoom(roomId, {
-        type: "legal-risk",
-        roomId,
-        createdAt: new Date().toISOString(),
-        issues: validIssues,
-      });
-
-      /* ========================
-         Set cooldown
-      ======================== */
-      await redis.set(cooldownKey, Date.now().toString(), "PX", COOLDOWN_MS);
-    } else {
-      console.log(
-        `ℹ️ No valid issues found (filtered out issues without legal basis)`,
+      // Filter out issues with "ไม่พบกฎหมายที่เกี่ยวข้อง"
+      const validIssues = allIssues.filter(
+        (issue) =>
+          issue.legalBasis?.type !==
+          "ไม่พบบทบัญญัติกฎหมายหรือหลักเกณฑ์ที่เกี่ยวข้องในเอกสารที่ค้นพบ",
       );
+
+      if (validIssues.length > 0) {
+        console.log(`🚨 Found ${validIssues.length} valid legal issues`);
+
+        /* ========================
+           Save to database
+        ======================== */
+        await prisma.legalRisk.createMany({
+          data: validIssues.map((issue) => ({
+            roomId,
+            riskLevel: issue.riskLevel ?? "ไม่ระบุ",
+            issueDescription: issue.issueDescription ?? "",
+            legalBasisType: issue.legalBasis?.type ?? "ไม่ระบุ",
+            legalBasisReference: issue.legalBasis?.reference ?? "",
+            legalReasoning: issue.legalReasoning ?? "",
+            recommendation: issue.recommendation ?? "",
+            urgencyLevel: issue.urgencyLevel ?? "ไม่ระบุ",
+            rawJson: issue,
+          })),
+        });
+
+        /* ========================
+           Broadcast to client
+        ======================== */
+        broadcastToRoom(roomId, {
+          type: "legal-risk",
+          roomId,
+          createdAt: new Date().toISOString(),
+          issues: validIssues,
+        });
+
+        /* ========================
+           Set cooldown
+        ======================== */
+        await redis.set(cooldownKey, Date.now().toString(), "PX", COOLDOWN_MS);
+      } else {
+        console.log(
+          `ℹ️ No valid issues found (filtered out issues without legal basis)`,
+        );
+        broadcastToRoom(roomId, {
+          type: "analysis-complete",
+          hasRisks: false,
+          message: "Analysis complete - no critical issues found",
+        });
+      }
+    } else {
+      // console.log(`ℹ️ No issues found`);
       broadcastToRoom(roomId, {
         type: "analysis-complete",
         hasRisks: false,
         message: "Analysis complete - no critical issues found",
       });
     }
-  } else {
-    // console.log(`ℹ️ No issues found`);
-    broadcastToRoom(roomId, {
-      type: "analysis-complete",
-      hasRisks: false,
-      message: "Analysis complete - no critical issues found",
-    });
+  } finally {
+    // Always clear the deep-analyzing flag so future chunks can proceed normally
+    await redis.del(deepAnalyzingKey);
   }
 
   // Clear buffer

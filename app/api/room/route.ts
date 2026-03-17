@@ -273,6 +273,7 @@ export async function GET(req: Request) {
         status: true,
         companyType: true,
         meetingNo: true,
+        accessToken: true,
       },
     });
 
