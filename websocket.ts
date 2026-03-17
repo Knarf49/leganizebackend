@@ -650,7 +650,9 @@ async function processTranscriptionQueue(roomId: string) {
         const listLen = await redis.rpush(redisKey, transcribedText);
         // Expire after 2 hours in case room never cleanly ends
         await redis.expire(redisKey, 7200);
-        console.log(`📝 [Redis] transcript:${roomId} → rpush OK, list length=${listLen}, text="${transcribedText.substring(0, 80)}${transcribedText.length > 80 ? '...' : ''}"`)
+        console.log(
+          `📝 [Redis] transcript:${roomId} → rpush OK, list length=${listLen}, text="${transcribedText.substring(0, 80)}${transcribedText.length > 80 ? "..." : ""}"`,
+        );
       } else {
         console.log(`⚠️ [Redis] transcript:${roomId} → skipped (empty text)`);
       }
@@ -807,7 +809,9 @@ async function processTranscriptAnalysis(
   await redis.ltrim(bufferKey, -BUFFER_SIZE, -1);
 
   const bufferLength = await redis.llen(bufferKey);
-  console.log(`📊 [Redis] buffer:${roomId} → rpush OK, pre-trim length=${bufferPushLen}, after-trim length=${bufferLength}/${BUFFER_SIZE}, text="${text.substring(0, 60)}${text.length > 60 ? '...' : ''}"`);  
+  console.log(
+    `📊 [Redis] buffer:${roomId} → rpush OK, pre-trim length=${bufferPushLen}, after-trim length=${bufferLength}/${BUFFER_SIZE}, text="${text.substring(0, 60)}${text.length > 60 ? "..." : ""}"`,
+  );
 
   // ยังไม่ครบ buffer
   if (bufferLength < BUFFER_SIZE) {
