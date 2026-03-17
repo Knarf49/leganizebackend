@@ -1,6 +1,7 @@
 type LegalAnalyzeInput = {
   roomId: string;
   transcript: string[];
+  threadId: string;
 };
 
 const POLL_INTERVAL_MS = 3_000;
