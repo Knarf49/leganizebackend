@@ -1,5 +1,9 @@
 import Redis from "ioredis";
 
-export const redis = new Redis(
-  "rediss://red-d5mbl2l6ubrc73a4ref0:V1Ge1KS9qOJZZTEcK3OYm0oesO7cG4fY@singapore-keyvalue.render.com:6379",
-);
+const redisUrl = process.env.REDIS_URL;
+
+if (!redisUrl) {
+  throw new Error("Missing REDIS_URL environment variable");
+}
+
+export const redis = new Redis(redisUrl);
