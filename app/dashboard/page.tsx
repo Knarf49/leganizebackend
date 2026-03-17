@@ -1,12 +1,16 @@
 "use client";
 
+import AnalysisStatusBanner from "@/components/AnalysisStatusBanner";
 import MeetingCard from "@/components/MeetingCard";
 import MeetingDetails from "@/components/MeetingDetail";
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
-//TODO: แก้ summary page
-//TODO: connect all routing
-//TODO: เปลี่ยน google cloud stt --> typhoon asr api
+
+export type AnalysisStatus =
+  | { type: "idle" }
+  | { type: "analyzing" }
+  | { type: "deep-analyzing" }
+  | { type: "no-risk" };
 
 type Room = {
   id: string;
@@ -123,6 +127,9 @@ export default function DashboardPage() {
     { id: string; content: string; createdAt: string }[]
   >([]);
   const [isLoadingTranscript] = useState(false);
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>({
+    type: "idle",
+  });
 
   // ESP32 auto-recording state
   const esp32DeviceIdRef = useRef<string | null>(null);
@@ -451,6 +458,16 @@ export default function DashboardPage() {
           ) {
             setIsEsp32Recording(true);
           }
+        } else if (msg.type === "analyzing") {
+          setAnalysisStatus({ type: "analyzing" });
+        } else if (msg.type === "deep-analyzing") {
+          setAnalysisStatus({ type: "deep-analyzing" });
+        } else if (msg.type === "analysis-complete" && msg.hasRisks === false) {
+          setAnalysisStatus({ type: "no-risk" });
+          setTimeout(() => setAnalysisStatus({ type: "idle" }), 4000);
+        } else if (msg.type === "legal-risk") {
+          // risk found → reset status (the legal-risk alert UI handles display)
+          setAnalysisStatus({ type: "idle" });
         }
       } catch {
         // ignore non-JSON messages
@@ -458,6 +475,7 @@ export default function DashboardPage() {
     };
 
     return () => {
+      setAnalysisStatus({ type: "idle" });
       // บอก ESP32 ให้กลับ pending mode แล้วค่อย close WS
       if (esp32DeviceIdRef.current && ws.readyState === WebSocket.OPEN) {
         ws.send(
@@ -530,6 +548,9 @@ export default function DashboardPage() {
             >
               🎙 <span style={{ opacity: 0.8 }}>{partialTranscript}</span>
             </div>
+          )}
+          {analysisStatus.type !== "idle" && (
+            <AnalysisStatusBanner status={analysisStatus} />
           )}
           {selectedRoom && (
             <div
