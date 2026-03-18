@@ -87,7 +87,7 @@ export default function Navbar() {
             </AnimatePresence>
           </div>
 
-          <Link href="/create-meeting" className="navbar-new-meeting-btn">
+          <Link href="/quiz" className="navbar-new-meeting-btn">
             <Plus size={16} />
             <span>New Meeting</span>
           </Link>
