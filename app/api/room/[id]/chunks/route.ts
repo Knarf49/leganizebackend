@@ -4,19 +4,13 @@ import { redis } from "@/lib/redis";
 import { runRiskDetector } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
 import { emitLegalEvent } from "@/sse";
-import { OpenAI } from "openai";
 import {
   generateContextPrompt,
   removeOverlap,
   deduplicateAcrossChunks,
-  cleanTranscription,
-  filterNonThaiEnglishSentences,
-  filterLowConfidenceSegments,
 } from "@/lib/textProcessing";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const ASR_URL = process.env.ASR_SERVICE_URL ?? "http://localhost:8000";
 
 type AnalyzerIssue = {
   riskLevel?: string;
@@ -91,61 +85,49 @@ export async function POST(
       // Get previous chunks for context
       const contextKey = `room:${id}:context`;
       const previousTexts = await redis.lrange(contextKey, 0, -1);
-
-      // Generate context prompt from previous transcriptions
       const contextPrompt = generateContextPrompt(previousTexts);
-      console.log(`📝 Using context prompt: ${contextPrompt.slice(0, 50)}...`);
 
       const arrayBuffer = await audioFile.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
 
-      // Transcribe with verbose response for confidence filtering
-      const transcription = await openai.audio.transcriptions.create({
-        file: new File([buffer], audioFile.name, { type: audioFile.type }),
-        model: "whisper-1",
-        language: "th",
-        temperature: 0.0, // Reduce hallucination
-        response_format: "verbose_json",
-        prompt: contextPrompt,
+      // Call local ASR service (faster-whisper + speaker ID)
+      const asrForm = new FormData();
+      asrForm.append("audio", new Blob([buffer], { type: audioFile.type }), audioFile.name);
+      asrForm.append("context", contextPrompt);
+
+      const asrRes = await fetch(`${ASR_URL}/transcribe`, {
+        method: "POST",
+        body: asrForm,
       });
 
-      // Filter low-confidence segments
-      let rawText: string;
-      if ("segments" in transcription && transcription.segments) {
-        console.log(`🔍 Filtering low-confidence segments...`);
-        rawText = filterLowConfidenceSegments(
-          transcription.segments as Array<{
-            text: string;
-            no_speech_prob?: number;
-          }>,
-          0.6, // Reject segments with >60% probability of no speech
-        );
-      } else {
-        rawText = transcription.text;
+      if (!asrRes.ok) {
+        throw new Error(`ASR service error: ${asrRes.status}`);
       }
 
-      // Clean transcription
-      console.log(`🧹 Cleaning transcription...`);
-      rawText = cleanTranscription(rawText);
+      const asrData = (await asrRes.json()) as {
+        text: string;
+        speaker: string;
+        speaker_confidence: number;
+      };
 
-      // Filter non-Thai/English content
-      console.log(`🌐 Filtering non-Thai/English content...`);
-      rawText = filterNonThaiEnglishSentences(rawText);
+      console.log(`🎤 ASR: [${asrData.speaker}] ${asrData.text}`);
+
+      let rawText = asrData.text;
 
       // Remove overlap with previous chunk
       if (previousTexts.length > 0) {
-        console.log(`🔄 Removing overlap with previous chunk...`);
-        const lastChunk = previousTexts[previousTexts.length - 1];
-        rawText = removeOverlap(lastChunk, rawText);
+        rawText = removeOverlap(previousTexts[previousTexts.length - 1], rawText);
       }
 
       // Deduplicate across all previous chunks
       if (previousTexts.length > 0) {
-        console.log(`🔍 Deduplicating across previous chunks...`);
         rawText = deduplicateAcrossChunks(rawText, previousTexts);
       }
 
-      text = rawText.trim();
+      // Prefix with speaker name
+      text = rawText.trim()
+        ? `[${asrData.speaker}] ${rawText.trim()}`
+        : "";
       console.log(`✅ Transcription complete: ${text}`);
 
       // Store in context (keep last 5 chunks)

@@ -5,14 +5,11 @@ import { prisma } from "@/lib/prisma";
 import { redis } from "@/lib/redis";
 import { runRiskDetector, type CompanyTypeInput } from "@/lib/riskDetector";
 import { runRiskAnalyzer } from "@/lib/riskAnalyzer";
-import { transcribeAudio } from "@/lib/transcribe";
+
 import {
   callAgentForSummary,
   waitForTranscriptionComplete,
 } from "@/lib/agentSummary";
-import { writeFileSync, unlinkSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
 
 //TODO: ทำให้มัน detect legal risk ในแต่ละ chunk เลย
 type AudioChunkMessage = {
@@ -406,79 +403,34 @@ async function processSingleTranscription(
        2️⃣ Decode & Transcribe audio
     ======================== */
     const audioBuffer = Buffer.from(audio, "base64");
+    const asrUrl = process.env.ASR_SERVICE_URL ?? "http://localhost:8000";
 
-    // Save audio to temp file with proper extension based on MIME type
-    const tempDir = tmpdir(); // Use OS temp directory for deployment compatibility
+    const asrForm = new FormData();
+    asrForm.append(
+      "audio",
+      new Blob([audioBuffer], { type: mimeType ?? "audio/webm" }),
+      `audio.${mimeType?.includes("mp4") ? "mp4" : "webm"}`,
+    );
 
-    // Determine file extension from MIME type
-    let extension = "webm"; // default
-    if (mimeType) {
-      if (mimeType.includes("mp4")) {
-        extension = "mp4";
-      } else if (mimeType.includes("wav")) {
-        extension = "wav";
-      } else if (mimeType.includes("ogg")) {
-        extension = "ogg";
-      } else if (mimeType.includes("mp3")) {
-        extension = "mp3";
-      }
+    const asrRes = await fetch(`${asrUrl}/transcribe`, {
+      method: "POST",
+      body: asrForm,
+    });
+
+    if (!asrRes.ok) {
+      throw new Error(`ASR service error: ${asrRes.status}`);
     }
 
-    const tempPath = join(tempDir, `audio_${Date.now()}.${extension}`);
+    const asrData = (await asrRes.json()) as {
+      text: string;
+      speaker: string;
+      speaker_confidence: number;
+    };
 
-    writeFileSync(tempPath, audioBuffer);
-
-    let text = "";
-    try {
-      // Call TypeScript transcribe function
-      const openaiApiKey = process.env.OPENAI_API_KEY;
-
-      if (!openaiApiKey) {
-        throw new Error("OPENAI_API_KEY not set in environment");
-      }
-
-      const result = await transcribeAudio(tempPath, openaiApiKey);
-
-      if (result.success && result.text) {
-        text = result.text;
-        console.log(`✅ Transcribed (${item.timestamp}): ${text}`);
-      } else {
-        throw new Error(result.error || "Transcription failed");
-      }
-
-      /* OLD: Python script approach
-      // Use system python for compatibility (Linux/Docker uses /usr/bin/python3, Windows uses venv)
-      const pythonPath =
-        process.platform === "win32"
-          ? join(process.cwd(), ".venv", "Scripts", "python.exe")
-          : "python3";
-      const scriptPath = join(process.cwd(), "lib", "transcribe.py");
-
-      const output = execSync(
-        `"${pythonPath}" "${scriptPath}" "${tempPath}" "${openaiApiKey}"`,
-        {
-          encoding: "utf-8",
-          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        },
-      );
-
-      const result = JSON.parse(output);
-
-      if (result.success) {
-        text = result.text;
-        console.log(`✅ Transcribed (${item.timestamp}): ${text}`);
-      } else {
-        throw new Error(result.error);
-      }
-      */
-    } finally {
-      // Clean up temp file
-      try {
-        unlinkSync(tempPath);
-      } catch (e) {
-        console.error(`Failed to delete temp file:`, e);
-      }
-    }
+    let text = asrData.text.trim()
+      ? `[${asrData.speaker}] ${asrData.text.trim()}`
+      : "";
+    console.log(`✅ Transcribed (${item.timestamp}): ${text}`);
 
     broadcastToRoom(roomId, {
       type: "transcribed",
