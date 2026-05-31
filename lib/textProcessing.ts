@@ -1,8 +1,25 @@
-/**
+﻿/**
  * Text processing utilities for transcription cleanup and deduplication
  */
 
 import { franc } from "franc-min";
+
+/**
+ * Fix Thai text where characters are separated by spaces — a common STT artifact.
+ * Simply removes spaces between Thai characters until none remain.
+ *
+ * Example: "ได ้ ส ร ้ าง" → "ได้สร้าง"
+ */
+export function fixThaiSpacing(text: string): string {
+  if (!text) return "";
+  let result = text;
+  let prev: string;
+  do {
+    prev = result;
+    result = result.replace(/([\u0E00-\u0E7F]) (?=[\u0E00-\u0E7F])/g, "$1");
+  } while (result !== prev);
+  return result;
+}
 
 /**
  * Clean transcription text by removing unwanted characters and patterns
@@ -10,8 +27,11 @@ import { franc } from "franc-min";
 export function cleanTranscription(text: string): string {
   if (!text) return "";
 
+  // 0. Fix Thai spacing artifacts from STT (diacritics / single chars separated by spaces)
+  let cleaned = fixThaiSpacing(text);
+
   // 1. ลบอักขระแปลกๆ ที่ไม่ใช่ไทย/อังกฤษ/ตัวเลข/เครื่องหมาย
-  let cleaned = text.replace(
+  cleaned = cleaned.replace(
     /[^\u0E00-\u0E7Fa-zA-Z0-9\s\.\,\!\?\-\(\)\:\;]/g,
     "",
   );

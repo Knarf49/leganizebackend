@@ -235,11 +235,9 @@ export async function POST(
     const analyzerResult = await runRiskAnalyzer({
       roomId: id,
       transcript: buffer,
-      threadId: room.threadId,
     });
     console.log(`📋 Analyzer result:`, analyzerResult);
 
-    //TODO: alert ไปที่ frontend ผ่าน sse
     console.log(`🔍 Debugging analyzerResult:`, {
       result: analyzerResult,
       type: typeof analyzerResult,
