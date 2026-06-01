@@ -4,8 +4,12 @@ import "dotenv/config";
 import type { CompanyType } from "@/generated/prisma/enums";
 
 const model = new ChatOpenAI({
-  model: "gpt-4o-mini",
+  model: "openai/gpt-oss-120b:free",
   temperature: 0,
+  configuration: {
+    baseURL: "https://openrouter.ai/api/v1",
+    apiKey: process.env.OPENROUTER_API_KEY,
+  },
 });
 
 export type CompanyTypeInput = CompanyType | "บริษัทจำกัด" | "บริษัทมหาชนจำกัด";
