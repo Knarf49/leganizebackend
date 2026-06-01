@@ -45,3 +45,7 @@ google-credentials.json
 next-env.d.ts
 
 /generated/prisma
+
+# generated/test output
+/graphify-out/
+/test/genshin_audio/
