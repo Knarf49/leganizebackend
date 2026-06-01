@@ -94,29 +94,6 @@ function roomToDetails(room: Room) {
   };
 }
 
-// const liveMeeting = {
-//   title: "พิจารณากำหนดค่าตอบแทน\nคณะกรรมการบริษัท",
-//   company: "ABC จำกัด",
-//   type: "การประชุมสามัญประจำปี",
-//   no: "2/2569",
-//   date: "25 มกราคม 2569",
-//   time: "13:30 น. - 16:30 น.",
-//   location: "ณ ห้องประชุมบอร์ดรูม",
-//   tags: ["red", "yellow"],
-//   isLive: true,
-// };
-// const meetingDetails = {
-//   title: "พิจารณากำหนดค่าตอบแทนคณะกรรมการบริษัท",
-//   time: "13:30 น. - 16:30 น.",
-//   date: "25 มกราคม 2569",
-//   agendas: [
-//     { no: 1, title: "เรื่องที่ประธานแจ้งให้ทราบ", description: "", subItems: ["1.1 รายงานภาพรวมผลประกอบการไตรมาส 1/2569", "1.2 แนวโน้มธุรกิจและสถานการณ์เศรษฐกิจที่เกี่ยวข้อง"] },
-//     { no: 2, title: "รับรองรายงานการประชุมครั้งที่ผ่านมา", description: "", subItems: ["2.1 รับรองรายงานการประชุมคณะกรรมการบริษัท ครั้งที่ 1/2569 ซึ่งประชุมเมื่อวันที่ 20 มกราคม 2569"] },
-//     { no: 3, title: "เรื่องเพื่อพิจารณา", description: "", subItems: ["3.1 พิจารณากำหนดอัตราค่าตอบแทนกรรมการ", "รายละเอียดตามเอกสารแนบ"] },
-//   ],
-//   resolution: "ฝ่ายเลขานุบริษัทเสนอให้ที่ประชุมพิจารณาอนุมัติอัตราค่าตอบแทนคณะกรรมการบริษัท ประจำปี 2569...",
-// };
-
 export default function DashboardPage() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -130,17 +107,6 @@ export default function DashboardPage() {
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>({
     type: "idle",
   });
-
-  // ESP32 auto-recording state
-  const esp32DeviceIdRef = useRef<string | null>(null);
-  const [isEsp32Recording, setIsEsp32Recording] = useState(false);
-  const [linkedDeviceId, setLinkedDeviceId] = useState<string | null>(null);
-  const [pendingDevices, setPendingDevices] = useState<{ deviceId: string }[]>(
-    [],
-  );
-  const [connectedDevices, setConnectedDevices] = useState<
-    { deviceId: string; roomId: string }[]
-  >([]);
 
   // Audio recording refs
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -215,16 +181,11 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // Auto-scroll transcript to bottom when new chunks or partial text arrive
   useEffect(() => {
     if (showTranscript) {
       transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [transcriptChunks, partialTranscript, showTranscript]);
-
-  const handleShowTranscript = () => {
-    setShowTranscript(true);
-  };
 
   const handleEndMeeting = async (room: Room) => {
     if (
@@ -235,24 +196,6 @@ export default function DashboardPage() {
       return;
     setIsEndingMeeting(true);
     try {
-      // ส่ง stop-recording ให้ ESP32 ก่อนปิดห้อง
-      const ws = wsRef.current;
-      if (esp32DeviceIdRef.current && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "stop-recording",
-            targetDeviceId: esp32DeviceIdRef.current,
-          }),
-        );
-      }
-      esp32DeviceIdRef.current = null;
-      setIsEsp32Recording(false);
-      setLinkedDeviceId(null);
-      // ลบ ESP32 config ออกจาก localStorage
-      try {
-        localStorage.removeItem(`esp32:${room.id}`);
-      } catch {}
-
       const res = await fetch(`/api/room/${room.id}/end`, { method: "POST" });
       if (!res.ok) throw new Error("Failed to end room");
       setRooms((prev) => prev.filter((r) => r.id !== room.id));
@@ -267,76 +210,6 @@ export default function DashboardPage() {
 
   const selectedRoom = rooms[selectedIndex] ?? null;
 
-  // เชื่อม ESP32 จากหน้า dashboard โดยตรง
-  const linkDevice = useCallback(
-    (deviceId: string) => {
-      if (!selectedRoom) return;
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const configWs = new WebSocket(
-        `${proto}//${window.location.host}/ws?type=browser&roomId=${selectedRoom.id}&accessToken=${selectedRoom.accessToken}&targetDeviceId=${deviceId}`,
-      );
-      configWs.onopen = () => {
-        setPendingDevices((prev) =>
-          prev.filter((d) => d.deviceId !== deviceId),
-        );
-        setConnectedDevices((prev) =>
-          prev.filter((d) => d.deviceId !== deviceId),
-        );
-        try {
-          // Clear esp32 binding for ALL other rooms so only this room auto-starts
-          for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (
-              key &&
-              key.startsWith("esp32:") &&
-              key !== `esp32:${selectedRoom.id}`
-            ) {
-              const val = localStorage.getItem(key);
-              if (val) {
-                try {
-                  const parsed = JSON.parse(val) as { deviceId: string };
-                  if (parsed.deviceId === deviceId)
-                    localStorage.removeItem(key);
-                } catch {}
-              }
-            }
-          }
-          localStorage.setItem(
-            `esp32:${selectedRoom.id}`,
-            JSON.stringify({ deviceId }),
-          );
-        } catch {}
-        // Update UI immediately — device is now configured
-        esp32DeviceIdRef.current = deviceId;
-        setLinkedDeviceId(deviceId);
-        setIsEsp32Recording(false); // waiting for ESP32 to reconnect
-        configWs.close();
-
-        // Try to send start-recording once ESP32 has time to reconnect; retry a few times
-        const tryStart = (attemptsLeft: number) => {
-          const ws = wsRef.current;
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(
-              JSON.stringify({
-                type: "start-recording",
-                targetDeviceId: deviceId,
-              }),
-            );
-            setIsEsp32Recording(true);
-            console.log(`🎙️ Sent start-recording to ESP32: ${deviceId}`);
-          } else if (attemptsLeft > 0) {
-            setTimeout(() => tryStart(attemptsLeft - 1), 1000);
-          }
-        };
-        setTimeout(() => tryStart(4), 1500);
-      };
-      configWs.onerror = () => {
-        console.error(`❌ Failed to link ESP32: ${deviceId}`);
-      };
-    },
-    [selectedRoom],
-  );
-
   useEffect(() => {
     fetch("/api/room?limit=5&status=ACTIVE")
       .then((res) => res.json())
@@ -344,39 +217,12 @@ export default function DashboardPage() {
       .catch((err) => console.error("Failed to fetch rooms:", err));
   }, []);
 
-  // Poll หา ESP32 ที่รอการเชื่อมต่อ (เฉพาะเมื่อมีห้องประชุม active และยังไม่ได้เชื่อม)
-  useEffect(() => {
-    if (!selectedRoom || selectedRoom.status !== "ACTIVE") return;
-    const poll = async () => {
-      try {
-        const [pendingRes, connectedRes] = await Promise.all([
-          fetch("/api/esp32/pending"),
-          fetch("/api/esp32/connected"),
-        ]);
-        const pendingData = await pendingRes.json();
-        const connectedData = await connectedRes.json();
-        setPendingDevices(pendingData.devices ?? []);
-        // Only show ESP32s that are in a DIFFERENT room
-        setConnectedDevices(
-          (
-            connectedData.devices as { deviceId: string; roomId: string }[]
-          ).filter((d) => d.roomId !== selectedRoom.id),
-        );
-      } catch {}
-    };
-    poll();
-    const interval = setInterval(poll, 2000);
-    return () => clearInterval(interval);
-  }, [selectedRoom?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Keep a WebSocket connection to the selected ACTIVE room and auto-start recording
   useEffect(() => {
     stopRecording();
     setTranscriptChunks([]);
 
     if (!selectedRoom || selectedRoom.status !== "ACTIVE") return;
 
-    // Pre-load existing transcript chunks from DB
     fetch(`/api/room/${selectedRoom.id}/summarize`)
       .then((res) => res.json())
       .then((data) => {
@@ -392,40 +238,13 @@ export default function DashboardPage() {
     );
     wsRef.current = ws;
 
-    ws.onopen = () => {
-      // ถ้ามี ESP32 ที่ลิงก์ไว้กับ room นี้ใน localStorage → auto-start recording
-      try {
-        const stored = localStorage.getItem(`esp32:${selectedRoom.id}`);
-        if (stored) {
-          const { deviceId } = JSON.parse(stored) as { deviceId: string };
-          if (deviceId) {
-            esp32DeviceIdRef.current = deviceId;
-            setLinkedDeviceId(deviceId);
-            ws.send(
-              JSON.stringify({
-                type: "start-recording",
-                targetDeviceId: deviceId,
-              }),
-            );
-            setIsEsp32Recording(true);
-            console.log(`🎙️ Auto-started ESP32 recording: ${deviceId}`);
-          }
-        }
-      } catch {}
-    };
-
-    ws.onerror = (e) => {
-      console.error("[Dashboard WS] error", e);
-    };
-
-    ws.onclose = (e) => {
+    ws.onerror = (e) => console.error("[Dashboard WS] error", e);
+    ws.onclose = (e) =>
       console.warn("[Dashboard WS] closed", e.code, e.reason);
-    };
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        // console.log("[Dashboard WS] msg", msg.type, msg);
         if (msg.type === "partial-transcript") {
           setPartialTranscript(msg.text ?? "");
         } else if (msg.type === "transcribed") {
@@ -435,7 +254,6 @@ export default function DashboardPage() {
             createdAt: new Date(msg.timestamp ?? Date.now()).toISOString(),
           };
           setTranscriptChunks((prev) => {
-            // Deduplicate: skip if last chunk has same content (direct + broadcast both fire)
             if (
               prev.length > 0 &&
               prev[prev.length - 1].content === newChunk.content
@@ -445,62 +263,32 @@ export default function DashboardPage() {
             return [...prev, newChunk];
           });
           setPartialTranscript("");
-        } else if (msg.type === "esp32-audio-chunk") {
-          // ESP32 is actively sending audio → confirm recording state
-          if (esp32DeviceIdRef.current) {
-            setIsEsp32Recording(true);
-          }
-        } else if (msg.type === "esp32-started-recording") {
-          // Server confirmed start-recording was delivered to ESP32
-          if (
-            msg.deviceId === esp32DeviceIdRef.current ||
-            esp32DeviceIdRef.current
-          ) {
-            setIsEsp32Recording(true);
-          }
         } else if (msg.type === "analyzing") {
           setAnalysisStatus({ type: "analyzing" });
         } else if (msg.type === "deep-analyzing") {
           setAnalysisStatus({ type: "deep-analyzing" });
-        } else if (msg.type === "analysis-complete" && msg.hasRisks === false) {
+        } else if (
+          msg.type === "analysis-complete" &&
+          msg.hasRisks === false
+        ) {
           setAnalysisStatus({ type: "no-risk" });
           setTimeout(() => setAnalysisStatus({ type: "idle" }), 4000);
         } else if (msg.type === "legal-risk") {
-          // risk found → reset status (the legal-risk alert UI handles display)
           setAnalysisStatus({ type: "idle" });
         }
       } catch {
-        // ignore non-JSON messages
+        // ignore non-JSON
       }
     };
 
     return () => {
       setAnalysisStatus({ type: "idle" });
-      // บอก ESP32 ให้กลับ pending mode แล้วค่อย close WS
-      if (esp32DeviceIdRef.current && ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "go-pending",
-            targetDeviceId: esp32DeviceIdRef.current,
-          }),
-        );
-      }
-      // ลบ ESP32 binding ของห้องนี้ออกจาก localStorage เมื่อออกจากห้อง
-      try {
-        if (selectedRoom?.id)
-          localStorage.removeItem(`esp32:${selectedRoom.id}`);
-      } catch {}
-      esp32DeviceIdRef.current = null;
-      setIsEsp32Recording(false);
-      setLinkedDeviceId(null);
-      setPendingDevices([]);
-      setConnectedDevices([]);
       stopRecording();
       setPartialTranscript("");
       wsRef.current = null;
       ws.close();
     };
-  }, [selectedRoom?.id, startRecording, stopRecording]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedRoom?.id, stopRecording]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <motion.div
@@ -563,7 +351,7 @@ export default function DashboardPage() {
             >
               <button
                 className="transcript-btn"
-                onClick={() => handleShowTranscript()}
+                onClick={() => setShowTranscript(true)}
               >
                 📄 แสดง Transcript
                 {transcriptChunks.length > 0
@@ -585,194 +373,8 @@ export default function DashboardPage() {
                   fontSize: "0.85rem",
                 }}
               >
-                {isRecording
-                  ? "⏹ หยุดไมค์คอมฯ"
-                  : "🎙️ เปิดไมค์คอมฯ (ถ้าไม่มี ESP32)"}
+                {isRecording ? "⏹ หยุดอัดเสียง" : "🎙️ เปิดไมค์"}
               </button>
-            </div>
-          )}
-          {/* ESP32 status bar + discovery panel */}
-          {selectedRoom?.status === "ACTIVE" && (
-            <div style={{ marginTop: "0.75rem" }}>
-              {linkedDeviceId ? (
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.6rem",
-                    padding: "0.45rem 0.9rem",
-                    borderRadius: "0.5rem",
-                    background: isEsp32Recording
-                      ? "rgba(99,102,241,0.1)"
-                      : "rgba(156,163,175,0.15)",
-                    border: `1px solid ${isEsp32Recording ? "rgba(99,102,241,0.35)" : "rgba(156,163,175,0.4)"}`,
-                    width: "fit-content",
-                  }}
-                >
-                  {isEsp32Recording && (
-                    <span
-                      style={{
-                        width: "0.55rem",
-                        height: "0.55rem",
-                        borderRadius: "50%",
-                        background: "#6366f1",
-                        display: "inline-block",
-                        flexShrink: 0,
-                        animation: "pulse 1.4s ease-in-out infinite",
-                      }}
-                    />
-                  )}
-                  <span
-                    style={{
-                      color: isEsp32Recording ? "#6366f1" : "#6b7280",
-                      fontSize: "0.82rem",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {isEsp32Recording
-                      ? `📡 ESP32 กำลังอัดเสียง · ${linkedDeviceId}`
-                      : `📡 ESP32 หยุดชั่วคราว · ${linkedDeviceId}`}
-                  </span>
-                  <button
-                    onClick={() => {
-                      const ws = wsRef.current;
-                      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-                      if (isEsp32Recording) {
-                        ws.send(
-                          JSON.stringify({
-                            type: "stop-recording",
-                            targetDeviceId: linkedDeviceId,
-                          }),
-                        );
-                        setIsEsp32Recording(false);
-                      } else {
-                        ws.send(
-                          JSON.stringify({
-                            type: "start-recording",
-                            targetDeviceId: linkedDeviceId,
-                          }),
-                        );
-                        esp32DeviceIdRef.current = linkedDeviceId;
-                        setIsEsp32Recording(true);
-                      }
-                    }}
-                    style={{
-                      padding: "0.2rem 0.6rem",
-                      borderRadius: "0.35rem",
-                      border: `1px solid ${isEsp32Recording ? "rgba(99,102,241,0.4)" : "rgba(99,102,241,0.4)"}`,
-                      background: "transparent",
-                      color: "#6366f1",
-                      fontWeight: 600,
-                      fontSize: "0.75rem",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {isEsp32Recording ? "⏸ หยุดชั่วคราว" : "▶ อัดต่อ"}
-                  </button>
-                </div>
-              ) : (
-                // ยังไม่มี ESP32 ที่ลิงก์ → แสดง pending devices + connected elsewhere
-                <div>
-                  {pendingDevices.length > 0 && (
-                    <>
-                      <p
-                        style={{
-                          fontSize: "0.8rem",
-                          color: "var(--text-muted, #9ca3af)",
-                          marginBottom: "0.4rem",
-                          fontWeight: 600,
-                        }}
-                      >
-                        📡 ESP32 ที่รอการเชื่อมต่อ
-                      </p>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: "0.45rem",
-                          marginBottom: "0.6rem",
-                        }}
-                      >
-                        {pendingDevices.map((device) => (
-                          <button
-                            key={device.deviceId}
-                            onClick={() => linkDevice(device.deviceId)}
-                            style={{
-                              padding: "0.3rem 0.8rem",
-                              borderRadius: "0.45rem",
-                              border: "1px solid #6366f1",
-                              background: "rgba(99,102,241,0.08)",
-                              color: "#6366f1",
-                              fontWeight: 600,
-                              fontSize: "0.8rem",
-                              cursor: "pointer",
-                              fontFamily: "monospace",
-                            }}
-                          >
-                            🔌 {device.deviceId}
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                  {connectedDevices.length > 0 && (
-                    <>
-                      <p
-                        style={{
-                          fontSize: "0.8rem",
-                          color: "var(--text-muted, #9ca3af)",
-                          marginBottom: "0.4rem",
-                          fontWeight: 600,
-                        }}
-                      >
-                        🔄 ESP32 ที่ใช้งานอยู่ใน room อื่น (คลิกเพื่อย้ายมายัง
-                        room นี้)
-                      </p>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: "0.45rem",
-                          marginBottom: "0.6rem",
-                        }}
-                      >
-                        {connectedDevices.map((device) => (
-                          <button
-                            key={device.deviceId}
-                            onClick={() => linkDevice(device.deviceId)}
-                            style={{
-                              padding: "0.3rem 0.8rem",
-                              borderRadius: "0.45rem",
-                              border: "1px solid #f59e0b",
-                              background: "rgba(245,158,11,0.08)",
-                              color: "#d97706",
-                              fontWeight: 600,
-                              fontSize: "0.8rem",
-                              cursor: "pointer",
-                              fontFamily: "monospace",
-                            }}
-                          >
-                            🔄 {device.deviceId}
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                  {pendingDevices.length === 0 &&
-                    connectedDevices.length === 0 && (
-                      <p
-                        style={{
-                          fontSize: "0.8rem",
-                          color: "var(--text-muted, #9ca3af)",
-                          fontWeight: 600,
-                        }}
-                      >
-                        📡 ESP32 ที่รอการเชื่อมต่อ{" "}
-                        <span style={{ fontWeight: 400 }}>(กำลังค้นหา...)</span>
-                      </p>
-                    )}
-                </div>
-              )}
             </div>
           )}
           {selectedRoom?.status === "ACTIVE" && isRecording && (
