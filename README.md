@@ -1,139 +1,177 @@
-# Prisma Setup Guide
+# Leganize
 
-## 1. Install Dependencies
+Real-time legal compliance monitoring for Thai company meetings. Records audio, transcribes speech, and flags violations of Thai corporate law (Civil and Commercial Code / Public Limited Companies Act) as the meeting happens.
+
+## How It Works
+
+```
+Browser mic → WebSocket (PCM audio) → ASR service → transcript
+                                                         ↓
+                                          Risk Detector (LLM, fast)
+                                                         ↓ YES
+                                          Risk Analyzer (LangGraph, deep)
+                                                         ↓
+                                          legal-risk alert → all room clients
+```
+
+1. Browser streams raw PCM audio via WebSocket with silence detection
+2. Server flushes audio chunks to ASR service → Thai transcript
+3. **Stage 1** — fast LLM (OpenRouter) checks if transcript violates Thai law: quorum, voting thresholds, conflict of interest, agenda rules
+4. **Stage 2** — if Stage 1 returns `YES`, LangGraph agent runs deep analysis with full legal citations
+5. Legal risk alerts broadcast to all connected clients in the room in real-time
+
+## Features
+
+- Real-time audio recording with VAD (voice activity detection)
+- Thai speech-to-text with speaker diarization
+- Two-stage legal risk detection (fast pre-filter → deep analysis)
+- Supports **บริษัทจำกัด** and **บริษัทมหาชนจำกัด** with correct legal rules per type
+- Meeting types: AGM, EGM, BOD
+- Meeting dashboard with calendar view
+- Post-meeting summarization and Q&A
+- Legal quiz mode for compliance training
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js 16, React 19, Tailwind CSS v4, Framer Motion |
+| Backend | Express + Next.js custom server, WebSocket (`ws`), SSE |
+| AI — Risk Detector | OpenRouter (`gpt-oss-120b:free`) via LangChain |
+| AI — Risk Analyzer | LangGraph (separate server in `/server`) |
+| ASR | External Python service (Whisper-based, default `localhost:8000`) |
+| Database | PostgreSQL via Prisma ORM |
+| Cache / Queue | Redis (ioredis) |
+| Deployment | Docker Compose |
+
+## Prerequisites
+
+- Node.js 20+
+- PostgreSQL 16
+- Redis 7
+- ASR service running at `ASR_SERVICE_URL` (Python/Whisper, exposes `POST /transcribe`)
+- LangGraph server running at `LANGGRAPH_URL`
+
+## Quick Start
+
+### Option A — Docker Compose (PostgreSQL + Redis only)
 
 ```bash
-npm install prisma tsx @types/pg --save-dev
-npm install @prisma/client @prisma/adapter-pg dotenv pg
+# Start postgres and redis
+docker compose up postgres redis -d
+
+# Install dependencies
+npm install
+
+# Set up env
+cp .env.example .env
+# edit .env — see Environment Variables section
+
+# Run migrations
+npx prisma migrate dev
+
+# Seed sample data (optional)
+npx prisma db seed
+
+# Start dev server
+npm run dev
 ```
 
-## 2. Initialize Prisma
+### Option B — Full Docker
 
 ```bash
-npx prisma init --db --output ../app/generated/prisma
+docker compose up
 ```
 
-## 3. Configure Prisma Schema
+App runs at `http://localhost:3000`.
 
-Create or update `prisma/schema.prisma`:
-
-```prisma
-generator client {
-  provider = "prisma-client-js"
-  output   = "../app/generated/prisma"
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-model Room {
-  id           String      @id @default(uuid())
-  status       RoomStatus  @default(ACTIVE)
-  threadId     String      @unique
-  accessToken  String      @unique
-  startedAt    DateTime    @default(now())
-  endedAt      DateTime?
-  finalSummary String?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-  companyType  CompanyType @default(LIMITED)
-}
-
-enum RoomStatus {
-  ACTIVE
-  ENDED
-  ABORTED
-}
-
-enum CompanyType {
-  LIMITED
-  PUBLIC_LIMITED
-}
-
-model TranscriptChunk {
-  id        String   @id @default(cuid())
-  roomId    String
-  content   String
-  createdAt DateTime @default(now())
-}
-
-model LegalRisk {
-  id                   String   @id @default(cuid())
-  roomId               String
-  riskLevel            String
-  issueDescription     String
-  legalBasisType       String
-  legalBasisReference  String
-  legalReasoning       String
-  recommendation       String
-  urgencyLevel         String
-  rawJson              Json
-  createdAt            DateTime @default(now())
-}
-
-model AnalysisLog {
-  id        String   @id @default(cuid())
-  roomId    String
-  status    String
-  rawOutput String
-  error     String?
-  createdAt DateTime @default(now())
-}
-```
-
-## 4. Configure Environment Variables
-
-Create or update `.env` file:
+## Environment Variables
 
 ```env
-DATABASE_URL="postgresql://username:password@localhost:5432/database_name?schema=public"
+# Database
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/leganize
 
-# Google Cloud Speech-to-Text API
-# Download your service account JSON key from Google Cloud Console
-# https://console.cloud.google.com/apis/credentials
-GOOGLE_APPLICATION_CREDENTIALS="path/to/your/service-account-key.json"
+# Redis
+REDIS_URL=redis://localhost:6379
+
+# ASR service (Python/Whisper)
+ASR_SERVICE_URL=http://localhost:8000
+
+# LangGraph server (risk analyzer)
+LANGGRAPH_URL=http://localhost:8123
+
+# LLM (risk detector)
+OPENROUTER_API_KEY=your_openrouter_api_key
+
+# Google Cloud (optional — legacy STT path)
+GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account.json
 ```
 
-### Setting up Google Cloud Speech-to-Text
+## Project Structure
 
-1. **Create a Google Cloud Project**:
-   - Go to [Google Cloud Console](https://console.cloud.google.com/)
-   - Create a new project or select an existing one
+```
+leganize/
+├── app/                    # Next.js app router
+│   ├── api/                # API routes
+│   ├── dashboard/          # Meeting overview
+│   ├── create-meeting/     # New room form
+│   ├── record/             # Real-time recording + live transcript
+│   ├── connect/            # Join existing room
+│   ├── summarize/          # Post-meeting summary
+│   ├── ask/                # Q&A against transcript
+│   └── quiz/               # Legal compliance quiz
+├── components/             # React components
+├── lib/
+│   ├── riskDetector.ts     # Stage 1: fast LLM risk check
+│   ├── riskAnalyzer.ts     # Stage 2: LangGraph deep analysis
+│   ├── prisma.ts           # Prisma client
+│   └── redis.ts            # Redis client
+├── prisma/
+│   ├── schema.prisma
+│   └── seed.ts
+├── server/                 # LangGraph agent server (separate app)
+├── server.ts               # Express + Next.js + WebSocket entry
+├── websocket.ts            # WebSocket server (audio streaming)
+├── sse.ts                  # SSE broadcast
+└── docker-compose.yml
+```
 
-2. **Enable Speech-to-Text API**:
-   - Navigate to "APIs & Services" > "Library"
-   - Search for "Cloud Speech-to-Text API"
-   - Click "Enable"
+## Database Models
 
-3. **Create Service Account Credentials**:
-   - Go to "APIs & Services" > "Credentials"
-   - Click "Create Credentials" > "Service Account"
-   - Follow the wizard and download the JSON key file
-   - Save it to your project directory (e.g., `google-credentials.json`)
-   - **Important**: Add this file to `.gitignore` to keep credentials secure
+| Model | Description |
+|---|---|
+| `Room` | Meeting session — type (AGM/EGM/BOD), company type, status, access token |
+| `TranscriptChunk` | Individual transcribed segments |
+| `LegalRisk` | Detected violations with legal basis, risk level, recommendation |
+| `AnalysisLog` | Raw analyzer output for audit |
 
-4. **Set Environment Variable**:
-
-   ```bash
-   # Windows PowerShell
-   $env:GOOGLE_APPLICATION_CREDENTIALS="C:\path\to\google-credentials.json"
-
-   # Linux/Mac
-   export GOOGLE_APPLICATION_CREDENTIALS="/path/to/google-credentials.json"
-   ```
-
-   Or add it to your `.env` file as shown above.
-
-## 5. Generate Prisma Client
+## Scripts
 
 ```bash
-npx prisma generate
+npm run dev          # Dev server with hot reload (tsx watch)
+npm run build        # Next.js production build
+npm run start        # Production server
+npm run test:risk    # Test risk detector against sample transcript
+npm run test:summary # Test meeting summarizer
 ```
 
-## 6. Run Database Migrations (Optional)
+## Legal Rules Monitored
 
-```bash
-npx prisma migrate dev --name init
-```
+The system checks Thai law in real-time during meetings:
+
+| Area | บริษัทจำกัด | บริษัทมหาชนจำกัด |
+|---|---|---|
+| Quorum | ≥2 persons, ≥¼ of shares (§1178) | ≥25 persons, ≥⅓ of shares (§103) |
+| Ordinary resolution | Simple majority | Simple majority |
+| Special resolution | ≥¾ of attendees (§1194) | ≥¾ of attendees (§107) |
+| Director removal | — | ¾ of persons + ½ of shares (§76) |
+| Conflict of interest | Conflicted party cannot vote (§1185) | Conflicted party cannot vote (§33) |
+| Agenda | Must be in notice, no new items at adjourned meeting (§1175, 1181) | Same |
+
+## Disclaimer
+
+Leganize is a compliance support tool. Output is **not legal advice**. Always have a qualified lawyer review findings before acting on them.
+
+## License
+
+MIT License © 2026 Leganize
