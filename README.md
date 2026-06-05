@@ -1,5 +1,7 @@
 # Leganize
 
+![Leganize](Leganize_thumbnail.jpg)
+
 Real-time legal compliance monitoring for Thai company meetings. Records audio, transcribes speech, and flags violations of Thai corporate law (Civil and Commercial Code / Public Limited Companies Act) as the meeting happens.
 
 ## How It Works
