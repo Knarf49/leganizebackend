@@ -2,6 +2,14 @@
 
 ![Leganize](Leganize_thumbnail.jpg)
 
+![project](https://img.shields.io/badge/project-Leganize-4A90D9?style=flat-square)
+![node](https://img.shields.io/badge/node.js-%3E%3D20-339933?style=flat-square)
+![next.js](https://img.shields.io/badge/next.js-16-black?style=flat-square)
+![langgraph](https://img.shields.io/badge/ai-LangGraph-FF6B35?style=flat-square)
+![database](https://img.shields.io/badge/database-PostgreSQL-336791?style=flat-square)
+![docker](https://img.shields.io/badge/docker-compose-2496ED?style=flat-square)
+![license](https://img.shields.io/badge/license-MIT-22C55E?style=flat-square)
+
 Real-time legal compliance monitoring for Thai company meetings. Records audio, transcribes speech, and flags violations of Thai corporate law (Civil and Commercial Code / Public Limited Companies Act) as the meeting happens.
 
 ## How It Works
