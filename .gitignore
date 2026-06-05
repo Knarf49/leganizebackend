@@ -49,3 +49,4 @@ next-env.d.ts
 # generated/test output
 /graphify-out/
 /test/genshin_audio/
+/test/
